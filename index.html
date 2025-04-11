@@ -84,10 +84,10 @@
 
         // キーポイント描画（信頼度 0.3 以上）
         pose.keypoints.forEach(keypoint => {
-          if (keypoint.score > 0.3) {
+          if (keypoint.score > 0.1) {
             const { x, y } = convertCoordinates(keypoint.position);
             ctx.beginPath();
-            ctx.arc(x, y, 6, 0, 2 * Math.PI);
+            ctx.arc(x, y, 60, 0, 20 * Math.PI);
             ctx.fillStyle = "#ff0000";
             ctx.fill();
           }
