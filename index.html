@@ -2,22 +2,181 @@
 <html>
   <head>
     <meta charset="utf-8">
-    <title>カメラアクセステスト</title>
+    <title>ポーズ推定＆骨格描画デモ</title>
+    <style>
+      #video, #canvas {
+        display: block;
+        margin: auto;
+      }
+    </style>
   </head>
   <body>
+    <h3 style="text-align:center;">ポーズ推定＆骨格描画デモ</h3>
+    <!-- カメラ映像表示用 -->
     <video id="video" width="640" height="480" autoplay muted></video>
+    <!-- 結果描画用キャンバス -->
+    <canvas id="canvas" width="640" height="480"></canvas>
+
+    <!-- OpenCV.js の読み込み (async) -->
+    <script async src="https://docs.opencv.org/4.x/opencv.js" onload="onOpenCvReady();" onerror="console.error('OpenCV.js の読み込みに失敗しました。');"></script>
     <script>
-      const video = document.getElementById('video');
-      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-        navigator.mediaDevices.getUserMedia({ video: true })
-          .then(function(stream) {
-            video.srcObject = stream;
-          })
-          .catch(function(err) {
-            console.error("カメラのアクセスエラー:", err);
-          });
-      } else {
-        alert("getUserMedia がサポートされていません");
+      // モデルファイルのパス（同一ディレクトリの場合）
+      const protoFile = 'pose_deploy_linevec.prototxt';
+      const weightsFile = 'pose_iter_440000.caffemodel';
+      const inWidth = 368;
+      const inHeight = 368;
+      const threshold = 0.1;
+
+      // OpenPose COCO 用 キーポイントと接続定義
+      const KEYPOINTS = [
+        "Nose", "Neck", "RShoulder", "RElbow", "RWrist",
+        "LShoulder", "LElbow", "LWrist", "RHip", "RKnee",
+        "RAnkle", "LHip", "LKnee", "LAnkle", "REye",
+        "LEye", "REar", "LEar"
+      ];
+      const POSE_PAIRS = [
+        [1, 2], [1, 5],
+        [2, 3], [3, 4],
+        [5, 6], [6, 7],
+        [1, 8], [8, 9],
+        [9, 10],
+        [1, 11], [11, 12],
+        [12, 13],
+        [1, 0], [0, 14],
+        [14, 16],
+        [0, 15], [15, 17]
+      ];
+
+      let net = null;
+      let streamingStarted = false;
+
+      // OpenCV.js 読み込み完了時に呼ばれる
+      function onOpenCvReady() {
+        console.log('OpenCV.js is ready.');
+        try {
+          // モデルの読み込み（Caffeモデル）
+          net = cv.readNetFromCaffe(protoFile, weightsFile);
+          if (!net.empty()) {
+            console.log("ネットワークの読み込みに成功しました。");
+          } else {
+            console.error("ネットワークが空です。ファイルパスやファイル内容を確認してください。");
+          }
+        } catch (err) {
+          console.error("ネットワークの読み込みエラー:", err);
+        }
+        startCamera();
+      }
+
+      // カメラ映像を取得する関数
+      function startCamera() {
+        const video = document.getElementById('video');
+        if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+          navigator.mediaDevices.getUserMedia({ video: true })
+            .then(function(stream) {
+              video.srcObject = stream;
+              video.play();
+              video.onloadedmetadata = function() {
+                if (!streamingStarted) {
+                  streamingStarted = true;
+                  processVideo();
+                }
+              };
+            })
+            .catch(function(err) {
+              console.error("カメラ映像の取得に失敗しました:", err);
+            });
+        } else {
+          alert("getUserMedia はこのブラウザでサポートされていません。");
+        }
+      }
+
+      // 映像フレームごとにポーズ推定と描画処理を実施
+      function processVideo() {
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+
+        // 映像フレームを格納する Mat
+        let src = new cv.Mat(video.height, video.width, cv.CV_8UC4);
+
+        function detectPose() {
+          try {
+            // 動画からフレームを取得し、キャンバスに描画
+            ctx.drawImage(video, 0, 0, video.width, video.height);
+            let imageData = ctx.getImageData(0, 0, video.width, video.height);
+            src.data.set(imageData.data);
+
+            // モデル入力用に blob へ変換（正規化、リサイズ）
+            let inputBlob = cv.blobFromImage(src, 1 / 255.0, new cv.Size(inWidth, inHeight), new cv.Scalar(0,0,0), false, false);
+            net.setInput(inputBlob);
+            let output = net.forward();
+
+            const outWidth = output.size(3);
+            const outHeight = output.size(2);
+
+            // キーポイントごとの座標を保持する配列（信頼度が threshold 以上なら有効）
+            let points = [];
+            for (let n = 0; n < KEYPOINTS.length; n++) {
+              let probMap = output.ptr(0, n);
+              let maxVal = -1;
+              let maxIdx = [0, 0];
+              for (let i = 0; i < outHeight; i++) {
+                for (let j = 0; j < outWidth; j++) {
+                  let idx = i * outWidth + j;
+                  let val = probMap[idx];
+                  if (val > maxVal) {
+                    maxVal = val;
+                    maxIdx = [j, i];
+                  }
+                }
+              }
+              let x = (video.width * maxIdx[0]) / outWidth;
+              let y = (video.height * maxIdx[1]) / outHeight;
+              if (maxVal > threshold) {
+                points.push({ x: x, y: y, conf: maxVal });
+              } else {
+                points.push(null);
+              }
+            }
+
+            // 元の映像を背景として再描画
+            ctx.drawImage(video, 0, 0, video.width, video.height);
+
+            // 骨（スケルトン）の描画
+            ctx.lineWidth = 3;
+            POSE_PAIRS.forEach(pair => {
+              const partA = pair[0];
+              const partB = pair[1];
+              if (points[partA] && points[partB]) {
+                ctx.strokeStyle = 'lime';
+                ctx.beginPath();
+                ctx.moveTo(points[partA].x, points[partA].y);
+                ctx.lineTo(points[partB].x, points[partB].y);
+                ctx.stroke();
+              }
+            });
+
+            // キーポイントの描画
+            points.forEach(pt => {
+              if (pt) {
+                ctx.fillStyle = 'red';
+                ctx.beginPath();
+                ctx.arc(pt.x, pt.y, 5, 0, 2 * Math.PI);
+                ctx.fill();
+              }
+            });
+
+            // 使用リソースの解放
+            inputBlob.delete();
+            output.delete();
+          } catch (err) {
+            console.error("Pose 推定中のエラー:", err);
+          }
+          // 次のフレームへ
+          requestAnimationFrame(detectPose);
+        }
+
+        requestAnimationFrame(detectPose);
       }
     </script>
   </body>
