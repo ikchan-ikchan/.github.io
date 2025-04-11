@@ -2,7 +2,7 @@
 <html>
   <head>
     <meta charset="utf-8">
-    <title>カメラ選択 & フレームレート指定 PoseNet デモ</title>
+    <title>MediaPipe Pose カメラ選択・FPS指定デモ</title>
     <style>
       body {
         font-family: sans-serif;
@@ -11,6 +11,7 @@
       video, canvas {
         display: block;
         margin: 10px auto;
+        border: 1px solid #ccc;
       }
       #controls {
         margin: 10px;
@@ -18,7 +19,7 @@
     </style>
   </head>
   <body>
-    <h2>カメラ選択 & フレームレート指定 PoseNet デモ</h2>
+    <h2>MediaPipe Pose カメラ選択 & FPS指定 デモ</h2>
     
     <div id="controls">
       <label for="cameraSelect">カメラ選択:</label>
@@ -26,134 +27,121 @@
       
       &nbsp;&nbsp;
       <label for="frameRateInput">フレームレート (fps):</label>
-      <input type="number" id="frameRateInput" min="1" value="15" style="width:60px;">
+      <input type="number" id="frameRateInput" min="1" value="30" style="width:60px;">
       
       &nbsp;&nbsp;
       <button id="startButton">開始</button>
     </div>
     
-    <!-- カメラ映像 -->
+    <!-- 映像表示用 -->
     <video id="video" width="640" height="480" autoplay muted playsinline></video>
-    <!-- 描画用キャンバス -->
+    <!-- 描画用 Canvas -->
     <canvas id="canvas" width="640" height="480"></canvas>
     
-    <!-- TensorFlow.js と PoseNet モデルの読み込み -->
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/posenet"></script>
+    <!-- MediaPipe Pose 本体 -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose"></script>
+    <!-- 描画用ユーティリティ -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+    <!-- カメラ管理用ユーティリティ -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
     
     <script>
-      const video = document.getElementById('video');
-      const canvas = document.getElementById('canvas');
-      const ctx = canvas.getContext('2d');
+      // 各種DOMの参照
+      const videoElement = document.getElementById('video');
+      const canvasElement = document.getElementById('canvas');
+      const ctx = canvasElement.getContext('2d');
       const cameraSelect = document.getElementById('cameraSelect');
       const frameRateInput = document.getElementById('frameRateInput');
       const startButton = document.getElementById('startButton');
-      
-      let net = null;
-      let activeStream = null;
-      let poseDetectionLoopId = null;
 
-      // ① カメラデバイスを列挙する
+      let mpPose = null;
+      let camera = null;
+
+      // ① カメラデバイスの列挙
       async function enumerateCameras() {
         try {
           const devices = await navigator.mediaDevices.enumerateDevices();
-          // 動画入力のデバイスのみ抽出
           const videoDevices = devices.filter(device => device.kind === 'videoinput');
           cameraSelect.innerHTML = "";
-          videoDevices.forEach(device => {
+          videoDevices.forEach((device, idx) => {
             const option = document.createElement('option');
             option.value = device.deviceId;
-            option.text = device.label || `カメラ ${cameraSelect.length + 1}`;
+            // ラベルが空の場合は "カメラ n" と表示
+            option.text = device.label || `カメラ ${idx + 1}`;
             cameraSelect.appendChild(option);
           });
         } catch (err) {
-          console.error('カメラの列挙に失敗:', err);
+          console.error('カメラ列挙エラー:', err);
         }
       }
 
-      // ② カメラ映像の開始：選択デバイスと指定のフレームレートを適用
-      async function startCamera() {
-        if (activeStream) {
-          activeStream.getTracks().forEach(track => track.stop());
+      // ② MediaPipe Pose の初期化
+      function initMediaPipePose() {
+        // pose インスタンスを作成。locateFile で必要なファイルパスを指定
+        mpPose = new Pose({
+          locateFile: (file) => {
+            return `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`;
+          }
+        });
+        // オプション設定（必要に応じて調整）
+        mpPose.setOptions({
+          modelComplexity: 1,
+          smoothLandmarks: true,
+          enableSegmentation: false,
+          smoothSegmentation: false,
+          minDetectionConfidence: 0.5,
+          minTrackingConfidence: 0.5
+        });
+        mpPose.onResults(onResults);
+      }
+
+      // ③ 検出結果の描画
+      function onResults(results) {
+        // Canvas をクリア
+        ctx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+        // 背景として映像を描画
+        ctx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+        if (results.poseLandmarks) {
+          // キーポイントを描画 (赤い円)
+          window.drawLandmarks(ctx, results.poseLandmarks, { color: 'red', radius: 5 });
+          // スケルトン（接続線）を描画 (緑色)
+          window.drawConnectors(ctx, results.poseLandmarks, Pose.POSE_CONNECTIONS,
+            { color: 'lime', lineWidth: 2 });
         }
+      }
+
+      // ④ カメラの開始
+      async function startCameraWithMediaPipe() {
         const selectedDeviceId = cameraSelect.value;
-        const frameRate = parseInt(frameRateInput.value) || 15;
+        const desiredFps = parseInt(frameRateInput.value) || 30;
+        // MediaPipe Camera Utils は渡す constraints に deviceId などを指定できる
         const constraints = {
           video: {
             deviceId: { exact: selectedDeviceId },
             width: { ideal: 640 },
             height: { ideal: 480 },
-            frameRate: { ideal: frameRate }
+            frameRate: { ideal: desiredFps }
           }
         };
-        try {
-          activeStream = await navigator.mediaDevices.getUserMedia(constraints);
-          video.srcObject = activeStream;
-          return new Promise((resolve) => {
-            video.onloadedmetadata = () => {
-              video.play();
-              resolve();
-            };
-          });
-        } catch (err) {
-          console.error('カメラ映像の取得に失敗:', err);
-        }
-      }
-
-      // ③ PoseNet の初期化＆ループ開始
-      async function runPoseNet() {
-        // PoseNet モデルのロード
-        net = await posenet.load();
-        console.log("PoseNet モデルの読み込み完了");
-        
-        // 検出ループ開始（ユーザー指定のfpsに合わせる）
-        const fps = parseInt(frameRateInput.value) || 15;
-        const interval = 1000 / fps;
-        async function detectPose() {
-          // PoseNet による単一人物推定
-          const pose = await net.estimateSinglePose(video, { flipHorizontal: false });
-          drawPose(pose);
-          poseDetectionLoopId = setTimeout(detectPose, interval);
-        }
-        detectPose();
-      }
-
-      // ④ 描画：ビデオ映像とPose結果（キーポイントとスケルトン）をキャンバスへ描画する
-      function drawPose(pose) {
-        // 背景として元の映像を描画
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        // キーポイントの描画（信頼度 0.5 以上）
-        pose.keypoints.forEach(keypoint => {
-          if (keypoint.score > 0.5) {
-            const { x, y } = keypoint.position;
-            ctx.beginPath();
-            ctx.arc(x, y, 5, 0, 2 * Math.PI);
-            ctx.fillStyle = 'red';
-            ctx.fill();
-          }
+        // カメラ生成時に自動で onFrame コールバック経由で mpPose に画像を送る
+        camera = new Camera(videoElement, {
+          onFrame: async () => {
+            await mpPose.send({ image: videoElement });
+          },
+          video: constraints.video  // Camera へ渡す映像制約
         });
-        // スケルトン（隣接キーポイントの線）
-        const adjacentKeyPoints = posenet.getAdjacentKeyPoints(pose.keypoints, 0.5);
-        adjacentKeyPoints.forEach(([keypoint1, keypoint2]) => {
-          ctx.beginPath();
-          ctx.moveTo(keypoint1.position.x, keypoint1.position.y);
-          ctx.lineTo(keypoint2.position.x, keypoint2.position.y);
-          ctx.strokeStyle = 'lime';
-          ctx.lineWidth = 2;
-          ctx.stroke();
-        });
+        camera.start();
       }
 
       // ⑤ 開始ボタン押下時の処理
       startButton.addEventListener('click', async () => {
-        if (poseDetectionLoopId) {
-          clearTimeout(poseDetectionLoopId);
+        if (!mpPose) {
+          initMediaPipePose();
         }
-        await startCamera();
-        runPoseNet();
+        await startCameraWithMediaPipe();
       });
 
-      // ページ読み込み時にカメラを列挙
+      // ページ読み込み時、カメラデバイスを列挙
       enumerateCameras();
     </script>
   </body>
