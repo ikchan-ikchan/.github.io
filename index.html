@@ -2,9 +2,8 @@
 <html>
   <head>
     <meta charset="utf-8">
-    <title>人検出デモ</title>
+    <title>ポーズ推定による骨格描画デモ</title>
     <style>
-      /* 映像と描画用キャンバスのスタイル */
       #video, #canvas {
         display: block;
         margin: auto;
@@ -14,92 +13,168 @@
   <body>
     <!-- カメラ映像表示用 -->
     <video id="video" width="640" height="480" autoplay muted></video>
-    <!-- 検出結果描画用 -->
+    <!-- 骨格描画用キャンバス -->
     <canvas id="canvas" width="640" height="480"></canvas>
     
-    <!-- OpenCV.js の読み込み (読み込み完了後 onOpenCvReady() を呼び出す) -->
+    <!-- OpenCV.js の読み込み -->
     <script async src="https://docs.opencv.org/4.x/opencv.js" onload="onOpenCvReady();"></script>
     <script>
-      // OpenCV.js のロード完了後に呼ばれる
+      // モデルファイルのパス（同一ディレクトリに置く場合の例）
+      const protoFile = 'pose_deploy_linevec.prototxt';
+      const weightsFile = 'pose_iter_440000.caffemodel';
+      // 入力サイズ（モデルに合わせる必要があります）
+      const inWidth = 368;
+      const inHeight = 368;
+      // 信頼度のしきい値
+      const threshold = 0.1;
+      
+      // ポーズ推定時の骨（キーポイント間）の接続定義（OpenPose COCO 用）
+      const POSE_PAIRS = [
+        [1, 2], [1, 5],
+        [2, 3], [3, 4],
+        [5, 6], [6, 7],
+        [1, 8], [8, 9],
+        [9, 10],
+        [1, 11], [11, 12],
+        [12, 13],
+        [1, 0], [0, 14],
+        [14, 16],
+        [0, 15], [15, 17]
+      ];
+      
+      // keypoint インデックスと部位名（参考用）
+      const KEYPOINTS = [
+        "Nose", "Neck", "RShoulder", "RElbow", "RWrist",
+        "LShoulder", "LElbow", "LWrist", "RHip", "RKnee",
+        "RAnkle", "LHip", "LKnee", "LAnkle", "REye",
+        "LEye", "REar", "LEar"
+      ];
+      
+      let net = null;
+      let streamingStarted = false;
+      
+      // OpenCV.js 読み込み完了後に呼ばれる
       function onOpenCvReady() {
         console.log('OpenCV.js is ready.');
+        // モデル読み込み開始
+        net = cv.readNetFromCaffe(protoFile, weightsFile);
         startCamera();
       }
       
-      // カメラ映像の取得と <video> 要素へのセットアップ
+      // カメラ映像取得と <video> へのセットアップ
       function startCamera() {
         const video = document.getElementById('video');
-        if (navigator.mediaDevices.getUserMedia) {
-          navigator.mediaDevices.getUserMedia({video: true})
+        if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+          navigator.mediaDevices.getUserMedia({ video: true })
             .then(function(stream) {
               video.srcObject = stream;
               video.play();
-              processVideo();
+              video.onloadedmetadata = function() {
+                if (!streamingStarted) {
+                  streamingStarted = true;
+                  processVideo();
+                }
+              };
             })
             .catch(function(err) {
               console.error("カメラ映像の取得に失敗しました: " + err);
             });
         } else {
-          alert("getUserMedia はこのブラウザではサポートされていません");
+          alert("getUserMedia がこのブラウザではサポートされていません");
         }
       }
-
-      // 映像フレームを取得して人検出と描画を行う処理
+      
+      // 動画処理
       function processVideo() {
         const video = document.getElementById('video');
         const canvas = document.getElementById('canvas');
         const ctx = canvas.getContext('2d');
-        const cap = new cv.VideoCapture(video);
         
-        // 入力映像用の Mat を作成 (4 チャンネル RGBA)
+        // 入力フレーム用の Mat（RGBA）
         let src = new cv.Mat(video.height, video.width, cv.CV_8UC4);
-        let gray = new cv.Mat();
         
-        // HOG ディスクリプタを初期化し、デフォルトの人検出器をセット
-        let hog = new cv.HOGDescriptor();
-        hog.setSVMDetector(cv.HOGDescriptor.getDefaultPeopleDetector());
-        
-        // フレームごとの処理関数
-        function detect() {
+        // フレーム処理関数
+        function detectPose() {
           try {
-            // カメラからフレームをキャプチャ
-            cap.read(src);
-            // グレースケールへ変換（検出精度向上のため）
-            cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-            
-            // 人検出を実施
-            let found = new cv.RectVector();
-            // パラメータ設定: hitThreshold=0, winStride, padding, scale, finalThreshold
-            let winStride = new cv.Size(8, 8);
-            let padding = new cv.Size(8, 8);
-            let scale = 1.05;
-            let finalThreshold = 2;
-            hog.detectMultiScale(gray, found, 0, winStride, padding, scale, finalThreshold);
-            
-            // 検出結果を描画するため、まずは元映像をキャンバスに描画
+            // 映像フレームを取得
             ctx.drawImage(video, 0, 0, video.width, video.height);
+            src.data.set(ctx.getImageData(0, 0, video.width, video.height).data);
             
-            // 検出された領域に対して矩形とオーバーレイ描画
-            for (let i = 0; i < found.size(); ++i) {
-              let rect = found.get(i);
-              // 赤色の矩形枠
-              ctx.strokeStyle = 'red';
-              ctx.lineWidth = 2;
-              ctx.strokeRect(rect.x, rect.y, rect.width, rect.height);
-              // 半透明の赤オーバーレイ
-              ctx.fillStyle = 'rgba(255, 0, 0, 0.3)';
-              ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
+            // DNN の入力サイズにリサイズ
+            let inputBlob = cv.blobFromImage(src, 1 / 255.0, new cv.Size(inWidth, inHeight), new cv.Scalar(0, 0, 0), false, false);
+            net.setInput(inputBlob);
+            
+            // 推論実施：結果は 4 次元テンソル [1, N, H, W]
+            let output = net.forward();
+            const outWidth = output.size(3);
+            const outHeight = output.size(2);
+            
+            // 推定された各キーポイントの位置を保持（各座標は画像上の実サイズに戻す）
+            let points = [];
+            for (let n = 0; n < KEYPOINTS.length; n++) {
+              // 出力は各部位毎の信頼度ヒートマップ
+              let probMap = output.ptr(0, n);
+              let maxVal = -1;
+              let maxIdx = [0, 0];
+              // ヒートマップ全体から最大値を探索
+              for (let i = 0; i < outHeight; i++) {
+                for (let j = 0; j < outWidth; j++) {
+                  let idx = i * outWidth + j;
+                  let val = probMap[idx];
+                  if (val > maxVal) {
+                    maxVal = val;
+                    maxIdx = [j, i];
+                  }
+                }
+              }
+              // 信頼度が threshold を超えれば有効なキーポイントとする
+              let x = (video.width * maxIdx[0]) / outWidth;
+              let y = (video.height * maxIdx[1]) / outHeight;
+              if (maxVal > threshold) {
+                points.push({ x: x, y: y, conf: maxVal });
+              } else {
+                points.push(null);
+              }
             }
             
-            // 使用した領域の解放
-            found.delete();
+            // 元画像に骨格情報を描画
+            // まず、元の映像を再描画
+            ctx.drawImage(video, 0, 0, video.width, video.height);
+            ctx.lineWidth = 3;
+            
+            // 各接続ペア毎に線を引く
+            POSE_PAIRS.forEach(pair => {
+              const partA = pair[0];
+              const partB = pair[1];
+              if (points[partA] && points[partB]) {
+                ctx.strokeStyle = 'lime';
+                ctx.beginPath();
+                ctx.moveTo(points[partA].x, points[partA].y);
+                ctx.lineTo(points[partB].x, points[partB].y);
+                ctx.stroke();
+              }
+            });
+            
+            // 各キーポイントに円を描画
+            points.forEach(pt => {
+              if (pt) {
+                ctx.fillStyle = 'red';
+                ctx.beginPath();
+                ctx.arc(pt.x, pt.y, 5, 0, 2 * Math.PI);
+                ctx.fill();
+              }
+            });
+            
+            // 入力 Blob 解放
+            inputBlob.delete();
+            output.delete();
           } catch (err) {
             console.error(err);
           }
-          // 次のフレーム処理をリクエスト
-          requestAnimationFrame(detect);
+          requestAnimationFrame(detectPose);
         }
-        requestAnimationFrame(detect);
+        
+        requestAnimationFrame(detectPose);
       }
     </script>
   </body>
