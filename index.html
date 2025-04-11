@@ -2,29 +2,33 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <title>Pose検出デモ</title>
+  <title>Pose検出デモ（修正版）</title>
   <style>
-    /* ブラウザの余白を無くして全画面表示を実現 */
+    /* 余白を削除し、全画面表示 */
     body, html {
       margin: 0;
       padding: 0;
       overflow: hidden;
       background: #000;
     }
+    /* videoとcanvasは同位置に配置し、canvasを上に表示 */
     video, canvas {
       position: absolute;
       top: 0;
       left: 0;
     }
+    canvas {
+      z-index: 10;
+    }
   </style>
 </head>
 <body>
-  <!-- カメラ映像表示用のvideo要素 -->
+  <!-- カメラ映像用 -->
   <video id="video" autoplay playsinline></video>
-  <!-- 推定結果描画用のcanvas -->
+  <!-- 推定結果描画用 -->
   <canvas id="overlay"></canvas>
 
-  <!-- TensorFlow.jsおよびPoseNetのライブラリを読み込む -->
+  <!-- TensorFlow.jsとPoseNetライブラリの読み込み -->
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.14.0"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/posenet"></script>
 
@@ -33,7 +37,7 @@
     const canvas = document.getElementById('overlay');
     const ctx = canvas.getContext('2d');
 
-    // カメラセットアップ：ユーザーのwebカメラを取得しvideoに流し込む
+    // カメラセットアップ：getUserMediaでカメラ映像を取得
     async function setupCamera() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
@@ -44,9 +48,10 @@
         return new Promise((resolve) => {
           video.onloadedmetadata = () => {
             video.play();
-            // videoのサイズに合わせてcanvasも設定
+            // videoのサイズに合わせてcanvasのサイズを設定
             canvas.width = video.videoWidth;
             canvas.height = video.videoHeight;
+            console.log("videoサイズ:", video.videoWidth, video.videoHeight);
             resolve();
           };
         });
@@ -55,29 +60,39 @@
       }
     }
 
-    // PoseNetモデルをロードする
+    // PoseNetモデルのロード
     async function loadPoseNet() {
-      const net = await posenet.load();
-      return net;
+      try {
+        const net = await posenet.load();
+        console.log("PoseNetモデルがロードされました");
+        return net;
+      } catch (e) {
+        console.error("PoseNetのロードに失敗しました：", e);
+      }
     }
 
-    // 1フレームごとに姿勢推定を実施
+    // 1フレームごとにPose推定を実施
     async function detectPose(net) {
-      // PoseNetによる姿勢推定
-      const pose = await net.estimateSinglePose(video, {
-        flipHorizontal: false,  // 必要に応じてtrueにすると鏡像になる
-        decodingMethod: 'single-person'
-      });
-      return pose;
+      try {
+        const pose = await net.estimateSinglePose(video, {
+          flipHorizontal: true, // カメラの鏡像に合わせる場合 true
+          decodingMethod: 'single-person'
+        });
+        console.log("推定結果:", pose);
+        return pose;
+      } catch (e) {
+        console.error("姿勢推定中にエラー：", e);
+      }
     }
 
-    // 推定結果をキャンバスに描画する
+    // 推定結果をキャンバスに描画する処理
     function drawPose(pose) {
+      // キャンバスをクリア
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-      // 信頼度が一定以上の各キーポイントを描画（顔の部位や他の部位）
+      // キーポイントを描画（閾値を0.3に変更）
       pose.keypoints.forEach(key => {
-        if (key.score > 0.5) {
+        if (key.score > 0.3) {
           ctx.beginPath();
           ctx.arc(key.position.x, key.position.y, 5, 0, 2 * Math.PI);
           ctx.fillStyle = "red";
@@ -85,8 +100,8 @@
         }
       });
 
-      // 隣接するキーポイント間を線で結んでボーンを描画
-      const adjacentKeyPoints = posenet.getAdjacentKeyPoints(pose.keypoints, 0.5);
+      // 隣接するキーポイント同士を線で結んでボーンを描画
+      const adjacentKeyPoints = posenet.getAdjacentKeyPoints(pose.keypoints, 0.3);
       adjacentKeyPoints.forEach(pair => {
         ctx.beginPath();
         ctx.moveTo(pair[0].position.x, pair[0].position.y);
@@ -97,14 +112,16 @@
       });
     }
 
-    // メイン処理：カメラセットアップ、モデル読み込み、ループ処理でリアルタイム推定
+    // メインのループ処理
     async function main() {
       await setupCamera();
       const net = await loadPoseNet();
 
       async function poseLoop() {
         const pose = await detectPose(net);
-        drawPose(pose);
+        if (pose) {
+          drawPose(pose);
+        }
         requestAnimationFrame(poseLoop);
       }
       poseLoop();
