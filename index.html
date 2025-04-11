@@ -1,96 +1,106 @@
 <!DOCTYPE html>
-<html lang="ja">
-<head>
-  <meta charset="UTF-8">
-  <title>カメラ映像から人検出</title>
-  <style>
-    /* 動画とキャンバスを重ねて表示 */
-    #videoElement, #overlay {
-      position: absolute;
-      top: 0;
-      left: 0;
-    }
-  </style>
-</head>
-<body>
-  <!-- カメラ映像を表示するためのvideoタグ -->
-  <video id="videoElement" width="640" height="480" autoplay muted></video>
-  <!-- 結果を描画するためのcanvasタグ -->
-  <canvas id="overlay" width="640" height="480"></canvas>
-
-  <!-- TensorFlow.jsとCOCO-SSDモデルの読み込み -->
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
-
-  <script>
-    const video = document.getElementById('videoElement');
-    const canvas = document.getElementById('overlay');
-    const ctx = canvas.getContext('2d');
-    let model = null;
-
-    // カメラ映像の取得
-    async function setupCamera() {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-        video.srcObject = stream;
-        return new Promise((resolve) => {
-          video.onloadedmetadata = () => {
-            video.play();
-            resolve();
-          }
-        });
-      } catch (err) {
-        console.error("カメラ取得エラー: ", err);
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>人検出デモ</title>
+    <style>
+      /* 映像と描画用キャンバスのスタイル */
+      #video, #canvas {
+        display: block;
+        margin: auto;
       }
-    }
-
-    // COCO-SSDモデルの読み込み
-    async function loadModel() {
-      model = await cocoSsd.load();
-      console.log("モデル読み込み完了");
-    }
-
-    // 動画フレーム毎に物体検出を実行し、結果を描画する関数
-    async function detectFrame() {
-      if (video.readyState === 4 && model) {
-        // 検出結果の取得
-        const predictions = await model.detect(video);
-
-        // キャンバスのクリア
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-        // 各検出結果に対して、personかどうか確認し描画する
-        predictions.forEach(prediction => {
-          if (prediction.class === 'person' && prediction.score > 0.5) { // 信頼度50%以上の場合
-            const [x, y, width, height] = prediction.bbox;
-
-            // 塗りつぶしの矩形 (半透明のカラー)
-            ctx.fillStyle = 'rgba(255, 0, 0, 0.3)';  // 赤を半透明で塗る
-            ctx.fillRect(x, y, width, height);
-
-            // 枠線を描画
-            ctx.strokeStyle = 'red';
-            ctx.lineWidth = 2;
-            ctx.strokeRect(x, y, width, height);
-
-            // ラベル表示（オプション）
-            ctx.font = '16px sans-serif';
-            ctx.fillStyle = 'red';
-            ctx.fillText(`${prediction.class} ${(prediction.score * 100).toFixed(1)}%`, x, y > 20 ? y - 5 : y + 20);
-          }
-        });
+    </style>
+  </head>
+  <body>
+    <!-- カメラ映像表示用 -->
+    <video id="video" width="640" height="480" autoplay muted></video>
+    <!-- 検出結果描画用 -->
+    <canvas id="canvas" width="640" height="480"></canvas>
+    
+    <!-- OpenCV.js の読み込み (読み込み完了後 onOpenCvReady() を呼び出す) -->
+    <script async src="https://docs.opencv.org/4.x/opencv.js" onload="onOpenCvReady();"></script>
+    <script>
+      // OpenCV.js のロード完了後に呼ばれる
+      function onOpenCvReady() {
+        console.log('OpenCV.js is ready.');
+        startCamera();
       }
-      requestAnimationFrame(detectFrame);
-    }
+      
+      // カメラ映像の取得と <video> 要素へのセットアップ
+      function startCamera() {
+        const video = document.getElementById('video');
+        if (navigator.mediaDevices.getUserMedia) {
+          navigator.mediaDevices.getUserMedia({video: true})
+            .then(function(stream) {
+              video.srcObject = stream;
+              video.play();
+              processVideo();
+            })
+            .catch(function(err) {
+              console.error("カメラ映像の取得に失敗しました: " + err);
+            });
+        } else {
+          alert("getUserMedia はこのブラウザではサポートされていません");
+        }
+      }
 
-    // 初期化処理
-    async function init() {
-      await setupCamera();
-      await loadModel();
-      detectFrame();  // 検出ループ開始
-    }
-
-    init();
-  </script>
-</body>
+      // 映像フレームを取得して人検出と描画を行う処理
+      function processVideo() {
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const cap = new cv.VideoCapture(video);
+        
+        // 入力映像用の Mat を作成 (4 チャンネル RGBA)
+        let src = new cv.Mat(video.height, video.width, cv.CV_8UC4);
+        let gray = new cv.Mat();
+        
+        // HOG ディスクリプタを初期化し、デフォルトの人検出器をセット
+        let hog = new cv.HOGDescriptor();
+        hog.setSVMDetector(cv.HOGDescriptor.getDefaultPeopleDetector());
+        
+        // フレームごとの処理関数
+        function detect() {
+          try {
+            // カメラからフレームをキャプチャ
+            cap.read(src);
+            // グレースケールへ変換（検出精度向上のため）
+            cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+            
+            // 人検出を実施
+            let found = new cv.RectVector();
+            // パラメータ設定: hitThreshold=0, winStride, padding, scale, finalThreshold
+            let winStride = new cv.Size(8, 8);
+            let padding = new cv.Size(8, 8);
+            let scale = 1.05;
+            let finalThreshold = 2;
+            hog.detectMultiScale(gray, found, 0, winStride, padding, scale, finalThreshold);
+            
+            // 検出結果を描画するため、まずは元映像をキャンバスに描画
+            ctx.drawImage(video, 0, 0, video.width, video.height);
+            
+            // 検出された領域に対して矩形とオーバーレイ描画
+            for (let i = 0; i < found.size(); ++i) {
+              let rect = found.get(i);
+              // 赤色の矩形枠
+              ctx.strokeStyle = 'red';
+              ctx.lineWidth = 2;
+              ctx.strokeRect(rect.x, rect.y, rect.width, rect.height);
+              // 半透明の赤オーバーレイ
+              ctx.fillStyle = 'rgba(255, 0, 0, 0.3)';
+              ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
+            }
+            
+            // 使用した領域の解放
+            found.delete();
+          } catch (err) {
+            console.error(err);
+          }
+          // 次のフレーム処理をリクエスト
+          requestAnimationFrame(detect);
+        }
+        requestAnimationFrame(detect);
+      }
+    </script>
+  </body>
 </html>
