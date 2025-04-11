@@ -2,127 +2,115 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <title>弓道射形確認ツール - 修正版</title>
+  <title>Pose検出デモ</title>
   <style>
-    html, body {
+    /* ブラウザの余白を無くして全画面表示を実現 */
+    body, html {
       margin: 0;
       padding: 0;
       overflow: hidden;
       background: #000;
-      height: 100%;
     }
-    #videoElement, #overlayCanvas {
+    video, canvas {
       position: absolute;
       top: 0;
       left: 0;
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
     }
   </style>
 </head>
 <body>
-  <!-- カメラ映像表示用 -->
-  <video id="videoElement" autoplay muted playsinline></video>
-  <!-- 描画用Canvas -->
-  <canvas id="overlayCanvas"></canvas>
+  <!-- カメラ映像表示用のvideo要素 -->
+  <video id="video" autoplay playsinline></video>
+  <!-- 推定結果描画用のcanvas -->
+  <canvas id="overlay"></canvas>
 
-  <!-- ml5.js CDN（PoseNet利用のため） -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/ml5/0.6.0/ml5.min.js"></script>
+  <!-- TensorFlow.jsおよびPoseNetのライブラリを読み込む -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.14.0"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/posenet"></script>
+
   <script>
-    const video = document.getElementById('videoElement');
-    const canvas = document.getElementById('overlayCanvas');
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('overlay');
     const ctx = canvas.getContext('2d');
-    let poseNet;
-    let poses = [];
 
-    // Canvasサイズをウィンドウサイズに合わせる
-    function resizeCanvas() {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-    }
-    window.addEventListener('resize', resizeCanvas);
-    resizeCanvas();
-
-    // カメラ映像の取得
-    async function startVideo() {
+    // カメラセットアップ：ユーザーのwebカメラを取得しvideoに流し込む
+    async function setupCamera() {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "user" },
+          audio: false
+        });
         video.srcObject = stream;
-      } catch (err) {
-        console.error("カメラ映像の取得に失敗しました:", err);
+        return new Promise((resolve) => {
+          video.onloadedmetadata = () => {
+            video.play();
+            // videoのサイズに合わせてcanvasも設定
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            resolve();
+          };
+        });
+      } catch (e) {
+        console.error("カメラの初期化に失敗しました：", e);
       }
     }
-    startVideo();
 
-    // 動画のメタデータ（サイズ情報）が利用可能になったらログ出力
-    video.addEventListener('loadedmetadata', () => {
-      console.log('Video dimensions:', video.videoWidth, video.videoHeight);
-    });
+    // PoseNetモデルをロードする
+    async function loadPoseNet() {
+      const net = await posenet.load();
+      return net;
+    }
 
-    // PoseNetモデルのロードと初期化
-    video.addEventListener('loadeddata', () => {
-      poseNet = ml5.poseNet(video, { flipHorizontal: true }, () => {
-        console.log('PoseNet モデルロード完了');
+    // 1フレームごとに姿勢推定を実施
+    async function detectPose(net) {
+      // PoseNetによる姿勢推定
+      const pose = await net.estimateSinglePose(video, {
+        flipHorizontal: false,  // 必要に応じてtrueにすると鏡像になる
+        decodingMethod: 'single-person'
       });
+      return pose;
+    }
 
-      // ポーズ検出結果の更新
-      poseNet.on('pose', results => {
-        poses = results;
-      });
-
-      // アニメーションループでCanvas上に描画
-      requestAnimationFrame(drawOverlay);
-    });
-
-    // オーバーレイの描画
-    function drawOverlay() {
+    // 推定結果をキャンバスに描画する
+    function drawPose(pose) {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-      poses.forEach(poseObj => {
-        const pose = poseObj.pose;
-
-        // キーポイント描画（信頼度 0.3 以上）
-        pose.keypoints.forEach(keypoint => {
-          if (keypoint.score > 0.1) {
-            const { x, y } = convertCoordinates(keypoint.position);
-            ctx.beginPath();
-            ctx.arc(x, y, 60, 0, 20 * Math.PI);
-            ctx.fillStyle = "#ff0000";
-            ctx.fill();
-          }
-        });
-
-        // adjacentKeyPoints を用いたボーン（線）の描画
-        const adjacentKeyPoints = ml5.poseNet.getAdjacentKeyPoints(pose.keypoints, 0.3);
-        // 出力内容をデバッグ用にコンソールへ出力（必要に応じてコメントアウト）
-        // console.log('adjacentKeyPoints:', adjacentKeyPoints);
-        adjacentKeyPoints.forEach(pair => {
-          const [{ position: posA }, { position: posB }] = pair;
-          const a = convertCoordinates(posA);
-          const b = convertCoordinates(posB);
+      // 信頼度が一定以上の各キーポイントを描画（顔の部位や他の部位）
+      pose.keypoints.forEach(key => {
+        if (key.score > 0.5) {
           ctx.beginPath();
-          ctx.moveTo(a.x, a.y);
-          ctx.lineTo(b.x, b.y);
-          ctx.lineWidth = 4;
-          ctx.strokeStyle = "#00ff00";
-          ctx.stroke();
-        });
+          ctx.arc(key.position.x, key.position.y, 5, 0, 2 * Math.PI);
+          ctx.fillStyle = "red";
+          ctx.fill();
+        }
       });
 
-      requestAnimationFrame(drawOverlay);
+      // 隣接するキーポイント間を線で結んでボーンを描画
+      const adjacentKeyPoints = posenet.getAdjacentKeyPoints(pose.keypoints, 0.5);
+      adjacentKeyPoints.forEach(pair => {
+        ctx.beginPath();
+        ctx.moveTo(pair[0].position.x, pair[0].position.y);
+        ctx.lineTo(pair[1].position.x, pair[1].position.y);
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = "blue";
+        ctx.stroke();
+      });
     }
 
-    // 座標変換：動画の実サイズと画面サイズの違いに対応
-    function convertCoordinates(pos) {
-      // video.videoWidth と video.videoHeight が 0 でないことを前提とする
-      const scaleX = window.innerWidth / video.videoWidth;
-      const scaleY = window.innerHeight / video.videoHeight;
-      return {
-        x: pos.x * scaleX,
-        y: pos.y * scaleY
-      };
+    // メイン処理：カメラセットアップ、モデル読み込み、ループ処理でリアルタイム推定
+    async function main() {
+      await setupCamera();
+      const net = await loadPoseNet();
+
+      async function poseLoop() {
+        const pose = await detectPose(net);
+        drawPose(pose);
+        requestAnimationFrame(poseLoop);
+      }
+      poseLoop();
     }
+
+    main();
   </script>
 </body>
 </html>
