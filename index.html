@@ -2,32 +2,97 @@
 <html>
   <head>
     <meta charset="utf-8">
-    <title>モデル読み込みテスト</title>
+    <title>TensorFlow.js PoseNet 骨格描画</title>
+    <style>
+      video, canvas {
+        display: block;
+        margin: auto;
+      }
+    </style>
   </head>
   <body>
-    <h3>OpenCV.js モデル読み込みテスト</h3>
-    <!-- OpenCV.js の読み込み -->
-    <script async src="https://docs.opencv.org/4.x/opencv.js"
-            onload="onOpenCvReady();"
-            onerror="console.error('OpenCV.js の読み込みに失敗しました。');"></script>
+    <h3 style="text-align:center;">TensorFlow.js PoseNet 骨格描画</h3>
+    <!-- カメラ映像表示用 -->
+    <video id="video" width="640" height="480" autoplay muted playsinline></video>
+    <!-- 描画用キャンバス -->
+    <canvas id="canvas" width="640" height="480"></canvas>
+
+    <!-- TensorFlow.js の読み込み -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+    <!-- PoseNet モデルの読み込み -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/posenet"></script>
+    
     <script>
-      // 同じディレクトリにモデルファイルがある場合
-      const protoFile = 'pose_deploy_linevec.prototxt';
-      const weightsFile = 'pose_iter_440000.caffemodel';
-      
-      function onOpenCvReady() {
-        console.log('OpenCV.js is ready.');
-        try {
-          let net = cv.readNetFromCaffe(protoFile, weightsFile);
-          if (!net.empty()) {
-            console.log("ネットワークの読み込みに成功しました。");
-          } else {
-            console.error("ネットワークが空です。モデルファイルのパスや内容を確認してください。");
-          }
-        } catch (err) {
-          console.error("ネットワークの読み込みエラー:", err);
+      const video = document.getElementById('video');
+      const canvas = document.getElementById('canvas');
+      const ctx = canvas.getContext('2d');
+
+      // カメラの初期化（Promise を返す）
+      async function setupCamera() {
+        if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+          const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+          video.srcObject = stream;
+          return new Promise((resolve) => {
+            video.onloadedmetadata = () => {
+              resolve(video);
+            };
+          });
+        } else {
+          throw new Error("ブラウザが getUserMedia に対応していません");
         }
       }
+
+      // PoseNet モデルの読み込みと検出開始
+      async function loadAndRunPoseNet() {
+        // PoseNet モデルをロード
+        const net = await posenet.load();
+        console.log("PoseNet モデルの読み込み完了");
+
+        // カメラをセットアップ
+        await setupCamera();
+        video.play();
+        detectPose(net);
+      }
+
+      // 動画からポーズを推定して描画
+      async function detectPose(net) {
+        // 単一人物推定
+        const pose = await net.estimateSinglePose(video, { flipHorizontal: false });
+        drawPose(pose);
+        requestAnimationFrame(() => detectPose(net));
+      }
+
+      // ポーズ（キーポイントとスケルトン）の描画
+      function drawPose(pose) {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        // 背景として元の映像を描画
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+        // キーポイントの描画（信頼度 0.5 以上のみ）
+        pose.keypoints.forEach(keypoint => {
+          if (keypoint.score > 0.5) {
+            const { y, x } = keypoint.position;
+            ctx.beginPath();
+            ctx.arc(x, y, 5, 0, 2 * Math.PI);
+            ctx.fillStyle = 'red';
+            ctx.fill();
+          }
+        });
+
+        // スケルトン（隣接するキーポイントの接続）
+        const adjacentKeyPoints = posenet.getAdjacentKeyPoints(pose.keypoints, 0.5);
+        adjacentKeyPoints.forEach(([keypoint1, keypoint2]) => {
+          ctx.beginPath();
+          ctx.moveTo(keypoint1.position.x, keypoint1.position.y);
+          ctx.lineTo(keypoint2.position.x, keypoint2.position.y);
+          ctx.strokeStyle = 'lime';
+          ctx.lineWidth = 2;
+          ctx.stroke();
+        });
+      }
+
+      // エントリーポイント
+      loadAndRunPoseNet().catch(err => console.error(err));
     </script>
   </body>
 </html>
