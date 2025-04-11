@@ -2,13 +2,14 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <title>弓道射形確認ツール</title>
+  <title>弓道射形確認ツール - 修正版</title>
   <style>
     html, body {
       margin: 0;
       padding: 0;
       overflow: hidden;
       background: #000;
+      height: 100%;
     }
     #videoElement, #overlayCanvas {
       position: absolute;
@@ -29,12 +30,13 @@
   <!-- ml5.js CDN（PoseNet利用のため） -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/ml5/0.6.0/ml5.min.js"></script>
   <script>
-    // DOM要素の取得
     const video = document.getElementById('videoElement');
     const canvas = document.getElementById('overlayCanvas');
     const ctx = canvas.getContext('2d');
+    let poseNet;
+    let poses = [];
 
-    // 画面サイズに合わせてCanvasサイズを調整
+    // Canvasサイズをウィンドウサイズに合わせる
     function resizeCanvas() {
       canvas.width = window.innerWidth;
       canvas.height = window.innerHeight;
@@ -42,7 +44,7 @@
     window.addEventListener('resize', resizeCanvas);
     resizeCanvas();
 
-    // カメラ映像を取得
+    // カメラ映像の取得
     async function startVideo() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
@@ -53,35 +55,36 @@
     }
     startVideo();
 
-    // PoseNetモデルの準備
-    let poseNet;
-    let poses = [];
+    // 動画のメタデータ（サイズ情報）が利用可能になったらログ出力
+    video.addEventListener('loadedmetadata', () => {
+      console.log('Video dimensions:', video.videoWidth, video.videoHeight);
+    });
+
+    // PoseNetモデルのロードと初期化
     video.addEventListener('loadeddata', () => {
-      // ml5 の PoseNet を初期化。videoを入力として利用
       poseNet = ml5.poseNet(video, { flipHorizontal: true }, () => {
         console.log('PoseNet モデルロード完了');
       });
+
       // ポーズ検出結果の更新
       poseNet.on('pose', results => {
         poses = results;
       });
-      // アニメーションループでCanvas描画
+
+      // アニメーションループでCanvas上に描画
       requestAnimationFrame(drawOverlay);
     });
 
-    // Canvasにオーバーレイ描画
+    // オーバーレイの描画
     function drawOverlay() {
-      // 透明な黒でCanvas全体をクリア（動画は下にあるので透過）
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-      // 検出結果をCanvasに描画
       poses.forEach(poseObj => {
         const pose = poseObj.pose;
 
-        // キーポイントごとに描画（顔や各部位）
+        // キーポイント描画（信頼度 0.3 以上）
         pose.keypoints.forEach(keypoint => {
-          if (keypoint.score > 0.5) { // 信頼度が0.5以上の場合のみ描画
-            // キーポイントを円で描画
+          if (keypoint.score > 0.3) {
             const { x, y } = convertCoordinates(keypoint.position);
             ctx.beginPath();
             ctx.arc(x, y, 6, 0, 2 * Math.PI);
@@ -90,8 +93,10 @@
           }
         });
 
-        // キーポイント間を線で結ぶ（シンプルな骨格線）
-        const adjacentKeyPoints = ml5.poseNet.getAdjacentKeyPoints(pose.keypoints, 0.5);
+        // adjacentKeyPoints を用いたボーン（線）の描画
+        const adjacentKeyPoints = ml5.poseNet.getAdjacentKeyPoints(pose.keypoints, 0.3);
+        // 出力内容をデバッグ用にコンソールへ出力（必要に応じてコメントアウト）
+        // console.log('adjacentKeyPoints:', adjacentKeyPoints);
         adjacentKeyPoints.forEach(pair => {
           const [{ position: posA }, { position: posB }] = pair;
           const a = convertCoordinates(posA);
@@ -105,15 +110,12 @@
         });
       });
 
-      // 次のフレームで再描画
       requestAnimationFrame(drawOverlay);
     }
 
-    // ビデオのサイズとCanvasのサイズが異なる場合に合わせるための座標変換
+    // 座標変換：動画の実サイズと画面サイズの違いに対応
     function convertCoordinates(pos) {
-      // 動画はobject-fit: cover を使用して全画面にフィットしているため、
-      // 簡易的にウィンドウサイズに合わせる。
-      // ※より厳密な変換を行いたい場合は、映像のアスペクト比と拡大状況に合わせた計算が必要です。
+      // video.videoWidth と video.videoHeight が 0 でないことを前提とする
       const scaleX = window.innerWidth / video.videoWidth;
       const scaleY = window.innerHeight / video.videoHeight;
       return {
