@@ -2,15 +2,28 @@
 <html>
   <head>
     <meta charset="UTF-8">
-    <title>MediaPipe Pose: カメラ選択 & フレームレート指定デモ</title>
+    <title>MediaPipe Pose: カメラ選択, フレームレート, 解像度指定デモ</title>
     <style>
-      body { font-family: sans-serif; text-align: center; }
-      video, canvas { display: block; margin: 10px auto; }
-      #controls { margin: 10px; }
+      body {
+        font-family: sans-serif;
+        text-align: center;
+      }
+      video, canvas {
+        display: block;
+        margin: 10px auto;
+      }
+      #controls {
+        margin: 10px;
+      }
+      #maxResolutionInfo {
+        margin-top: 5px;
+        font-size: 0.9em;
+        color: #555;
+      }
     </style>
   </head>
   <body>
-    <h2>MediaPipe Pose: カメラ選択 & フレームレート指定デモ</h2>
+    <h2>MediaPipe Pose: カメラ選択, フレームレート, 解像度指定デモ</h2>
     <div id="controls">
       <label for="cameraSelect">カメラ選択:</label>
       <select id="cameraSelect"></select>
@@ -18,15 +31,19 @@
       <label for="frameRateInput">フレームレート (fps):</label>
       <input type="number" id="frameRateInput" min="1" value="15" style="width:60px;">
       &nbsp;&nbsp;
+      <label for="resPercentInput">解像度 (%):</label>
+      <input type="number" id="resPercentInput" min="1" max="100" value="100" style="width:60px;">
+      &nbsp;&nbsp;
       <button id="startButton">開始</button>
+      <div id="maxResolutionInfo"></div>
     </div>
     
-    <!-- カメラ映像（非表示にして内部利用） -->
-    <video id="video" width="640" height="480" autoplay muted playsinline style="display:none;"></video>
+    <!-- カメラ映像（内部利用：表示は Canvas に描画） -->
+    <video id="video" autoplay muted playsinline style="display:none;"></video>
     <!-- 描画用キャンバス -->
     <canvas id="outputCanvas" width="640" height="480"></canvas>
     
-    <!-- MediaPipe Pose, Drawing Utils の読み込み -->
+    <!-- MediaPipe Pose と Drawing Utils の読み込み -->
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
     
@@ -36,9 +53,11 @@
       const canvasCtx = outputCanvas.getContext('2d');
       const cameraSelect = document.getElementById('cameraSelect');
       const frameRateInput = document.getElementById('frameRateInput');
+      const resPercentInput = document.getElementById('resPercentInput');
       const startButton = document.getElementById('startButton');
+      const maxResolutionInfo = document.getElementById('maxResolutionInfo');
       
-      let pose = null;
+      let pose = null;         // MediaPipe Pose インスタンス
       let processingLoopId = null;
       
       // ① 利用可能なカメラを列挙する
@@ -62,7 +81,6 @@
       function initializePose() {
         pose = new Pose({
           locateFile: (file) => {
-            // CDN 経由でファイルを取得する
             return `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`;
           }
         });
@@ -72,38 +90,64 @@
           minDetectionConfidence: 0.5,
           minTrackingConfidence: 0.5
         });
-        // onResults コールバックで描画処理を呼ぶ
+        // onResults コールバックで描画を実行
         pose.onResults(onResults);
       }
       
-      // ③ ポーズ検出結果を受け取って描画するコールバック
+      // ③ 結果を Canvas に描画するコールバック
       function onResults(results) {
-        // Canvas をクリアし、元の映像を背景として描画
         canvasCtx.save();
         canvasCtx.clearRect(0, 0, outputCanvas.width, outputCanvas.height);
+        // 背景に入力画像（映像）を描画
         canvasCtx.drawImage(results.image, 0, 0, outputCanvas.width, outputCanvas.height);
         if (results.poseLandmarks) {
-          // スケルトン（キーポイント間の接続）の描画
+          // キーポイント間の接続（スケルトン）を描画
           drawConnectors(canvasCtx, results.poseLandmarks, Pose.POSE_CONNECTIONS, { color: 'lime', lineWidth: 2 });
-          // キーポイント自体の描画
+          // 各キーポイントの描画
           drawLandmarks(canvasCtx, results.poseLandmarks, { color: 'red', lineWidth: 1 });
         }
         canvasCtx.restore();
       }
       
-      // ④ 選択したカメラで映像を取得する
+      // ④ 選択したカメラで、最大解像度からユーザー指定の%解像度で映像を取得する
       async function startCamera() {
-        if (video.srcObject) {
-          // 既存ストリームがあれば停止する
-          video.srcObject.getTracks().forEach(track => track.stop());
-        }
         const selectedDeviceId = cameraSelect.value;
+        
+        // ※ まず制約なし（または最小限）の getUserMedia でストリームを取得し、最大解像度を取得
+        const tempConstraints = { video: { deviceId: { exact: selectedDeviceId } } };
+        let tempStream;
+        try {
+          tempStream = await navigator.mediaDevices.getUserMedia(tempConstraints);
+        } catch (error) {
+          console.error('初回ストリームの取得に失敗:', error);
+          return;
+        }
+        
+        const videoTrack = tempStream.getVideoTracks()[0];
+        const capabilities = videoTrack.getCapabilities();
+        // capabilities.width/height が取得できれば、最大値を利用
+        let maxWidth = (capabilities.width && capabilities.width.max) || 640;
+        let maxHeight = (capabilities.height && capabilities.height.max) || 480;
+        maxResolutionInfo.innerText = `このカメラの最大解像度: ${maxWidth} x ${maxHeight}`;
+        
+        // ステップ：一度取得したストリームは停止
+        tempStream.getTracks().forEach(track => track.stop());
+        
+        // ユーザー指定の解像度パーセンテージ（例：100%、50% など）
+        const resPercent = parseInt(resPercentInput.value) || 100;
+        // 実際に使用する解像度
+        const desiredWidth = Math.floor(maxWidth * (resPercent / 100));
+        const desiredHeight = Math.floor(maxHeight * (resPercent / 100));
+        
+        // フレームレートの取得
         const frameRate = parseInt(frameRateInput.value) || 15;
+        
+        // 再度 getUserMedia を、算出した解像度・fpsで呼び出す
         const constraints = {
           video: {
             deviceId: { exact: selectedDeviceId },
-            width: { ideal: 640 },
-            height: { ideal: 480 },
+            width: { ideal: desiredWidth },
+            height: { ideal: desiredHeight },
             frameRate: { ideal: frameRate }
           }
         };
@@ -117,11 +161,11 @@
             };
           });
         } catch (error) {
-          console.error('カメラ映像の取得に失敗:', error);
+          console.error('最終的なカメラ映像の取得に失敗:', error);
         }
       }
       
-      // ⑤ 映像フレームを MediaPipe Pose に渡すループ
+      // ⑤ 映像フレームを MediaPipe Pose に送信するループ
       async function processVideo() {
         const frameRate = parseInt(frameRateInput.value) || 15;
         const interval = 1000 / frameRate;
@@ -129,12 +173,12 @@
           if (!video.paused && !video.ended) {
             await pose.send({ image: video });
           }
-          processingLoopId = setTimeout(sendFrame, interval);
+          setTimeout(sendFrame, interval);
         }
         sendFrame();
       }
       
-      // ⑥ スタートボタンのイベント（カメラの開始、Pose の初期化、ループ開始）
+      // ⑥ スタートボタン押下時の処理
       startButton.addEventListener('click', async () => {
         if (processingLoopId) {
           clearTimeout(processingLoopId);
