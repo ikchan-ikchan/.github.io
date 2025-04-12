@@ -77,13 +77,11 @@
 
       // ② MediaPipe Pose の初期化
       function initMediaPipePose() {
-        // pose インスタンスを作成。locateFile で必要なファイルパスを指定
         mpPose = new Pose({
           locateFile: (file) => {
             return `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`;
           }
         });
-        // オプション設定（必要に応じて調整）
         mpPose.setOptions({
           modelComplexity: 1,
           smoothLandmarks: true,
@@ -114,7 +112,6 @@
       async function startCameraWithMediaPipe() {
         const selectedDeviceId = cameraSelect.value;
         const desiredFps = parseInt(frameRateInput.value) || 30;
-        // MediaPipe Camera Utils は渡す constraints に deviceId などを指定できる
         const constraints = {
           video: {
             deviceId: { exact: selectedDeviceId },
@@ -123,25 +120,30 @@
             frameRate: { ideal: desiredFps }
           }
         };
-        // カメラ生成時に自動で onFrame コールバック経由で mpPose に画像を送る
+        // MediaPipe Camera Utils によるカメラ初期化
         camera = new Camera(videoElement, {
           onFrame: async () => {
             await mpPose.send({ image: videoElement });
           },
-          video: constraints.video  // Camera へ渡す映像制約
+          video: constraints.video
         });
         camera.start();
       }
 
-      // ⑤ 開始ボタン押下時の処理
+      // ⑤ 開始ボタン押下時の処理（カメラ切り替えに対応）
       startButton.addEventListener('click', async () => {
+        // 既にカメラが起動している場合は停止してから再起動する
+        if (camera) {
+          camera.stop();
+          camera = null;
+        }
         if (!mpPose) {
           initMediaPipePose();
         }
         await startCameraWithMediaPipe();
       });
 
-      // ページ読み込み時、カメラデバイスを列挙
+      // ページ読み込み時にカメラデバイスを列挙
       enumerateCameras();
     </script>
   </body>
