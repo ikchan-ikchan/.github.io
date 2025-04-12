@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <title>MediaPipe Pose カメラ選択 & FPS設定デモ</title>
+  <title>MediaPipe Pose カメラ選択 & FPS設定（Android対策）</title>
   <style>
     body {
       font-family: sans-serif;
@@ -16,13 +16,13 @@
       margin: 10px;
     }
   </style>
-  <!-- MediaPipe Pose、Camera Utils、Drawing Utils の読み込み -->
+  <!-- MediaPipe のライブラリ群の読み込み -->
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils"></script>
 </head>
 <body>
-  <h2>MediaPipe Pose カメラ選択 & FPS設定デモ</h2>
+  <h2>MediaPipe Pose カメラ選択 & FPS設定（Android対策）</h2>
   <div id="controls">
     <label for="cameraSelect">カメラ選択:</label>
     <select id="cameraSelect"></select>
@@ -33,8 +33,8 @@
     <button id="startButton">開始</button>
   </div>
 
-  <!-- 映像（内部用：iOS は非表示にして利用） -->
-  <video id="video" width="640" height="480" playsinline style="display: none;"></video>
+  <!-- 映像（内部用） -->
+  <video id="video" width="640" height="480" playsinline style="display:none;"></video>
   <!-- 描画用キャンバス -->
   <canvas id="output_canvas" width="640" height="480"></canvas>
 
@@ -61,14 +61,15 @@
     });
     pose.onResults(onResults);
 
-    // グローバル変数
-    let cameraInstance = null;      // MediaPipe Camera Utils 用（非 iOS 用）
-    let detectionLoopId = null;     // iOS 用自作ループで使うタイマーID
-
-    // iOS 判定（iPhone/iPad）
+    // ユーザーエージェントで判定（iOS、Android 判定）
     const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+    const isAndroid = /Android/.test(navigator.userAgent);
 
-    // ① カメラデバイスの列挙
+    // グローバル変数
+    let cameraInstance = null;      // デスクトップ向けの MediaPipe Camera Utils 用
+    let detectionLoopId = null;     // モバイル用自前ループのタイマーID
+
+    // ① カメラデバイスの列挙（利用可能な動画入力をドロップダウンに表示）
     async function enumerateCameras() {
       try {
         const devices = await navigator.mediaDevices.enumerateDevices();
@@ -77,6 +78,7 @@
         videoDevices.forEach((device, index) => {
           const option = document.createElement('option');
           option.value = device.deviceId;
+          // device label が取得できない場合もあるので、ラベルがあれば表示
           option.text = device.label || `カメラ ${index + 1}`;
           cameraSelect.appendChild(option);
         });
@@ -85,15 +87,14 @@
       }
     }
 
-    // ② 結果描画関数（MediaPipe の onResults）
+    // ② 結果描画関数：MediaPipe の onResults で呼ばれる
     function onResults(results) {
-      // 描画前にキャンバスをクリア
       canvasCtx.save();
       canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
-      // 結果画像（入力映像）を背景に描画
+      // 入力映像を背景に描画
       canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
       if (results.poseLandmarks) {
-        // Drawing Utils を利用して接続線を描画（グローバル定義済みの POSE_CONNECTIONS を使用）
+        // Drawing Utils の関数で骨格（接続線）を描画
         drawConnectors(canvasCtx, results.poseLandmarks, POSE_CONNECTIONS,
                        {color: '#00FF00', lineWidth: 4});
         // キーポイント描画
@@ -103,13 +104,14 @@
       canvasCtx.restore();
     }
 
-    // ③ iOS 用：自前で getUserMedia を呼び出し、FPS 指定の独自ループで推論を実行
-    async function startCameraForIOS() {
-      // 選択されているカメラのラベルから facingMode を決定
+    // ③ モバイル（Android/iOS）用：getUserMedia を利用してカメラ映像を取得
+    async function startCameraForMobile() {
+      // 選択されたカメラのラベルから facingMode を決定
       const selectedLabel = cameraSelect.options[cameraSelect.selectedIndex].text.toLowerCase();
-      // ラベルに "back" または "rear" または "環境" が含まれていれば、環境カメラ（リアカメラ）を指定
+      // ラベルに "back"、"rear"、"環境" などが含まれていれば背面カメラ、それ以外は前面カメラ
       const facingMode = (selectedLabel.includes("back") || selectedLabel.includes("rear") || selectedLabel.includes("環境"))
                          ? "environment" : "user";
+      // Android では deviceId 制約は無視されることがあるため、facingMode のみ指定する
       const constraints = {
         video: {
           facingMode: { exact: facingMode },
@@ -121,24 +123,23 @@
         const stream = await navigator.mediaDevices.getUserMedia(constraints);
         videoElement.srcObject = stream;
         await videoElement.play();
-        // FPS 指定（ms 単位の間隔）
+        // FPS 指定
         const fps = parseInt(frameRateInput.value, 10) || 30;
         const interval = 1000 / fps;
-        // 自前ループ：指定間隔ごとに pose.send() を呼び出す
         function detectionLoop() {
           pose.send({ image: videoElement });
           detectionLoopId = setTimeout(detectionLoop, interval);
         }
         detectionLoop();
       } catch (err) {
-        console.error("iOS カメラ映像の取得に失敗:", err);
+        console.error("モバイル用カメラ映像の取得に失敗:", err);
       }
     }
 
-    // ④ 非 iOS（デスクトップ・Android）の場合：MediaPipe Camera Utils を利用
-    async function startCameraForNonIOS() {
+    // ④ 非モバイル（デスクトップなど）用：MediaPipe Camera Utils を利用
+    async function startCameraForNonMobile() {
       const fps = parseInt(frameRateInput.value, 10) || 30;
-      // MediaPipe Camera のオプション：deviceId を指定するとそのカメラを利用
+      // MediaPipe Camera Utils のオプションでは deviceId を指定（PCでは有効な場合が多い）
       cameraInstance = new Camera(videoElement, {
         onFrame: async () => {
           await pose.send({ image: videoElement });
@@ -154,20 +155,20 @@
       }
     }
 
-    // ⑤ 「開始」ボタン押下時の処理
+    // ⑤ 「開始」ボタン押下時の処理：環境に合わせてカメラ取得処理を分岐
     startButton.addEventListener('click', async () => {
-      // 既存のループがあれば停止する
+      // 既存のループやストリームを停止
       if (detectionLoopId) { clearTimeout(detectionLoopId); detectionLoopId = null; }
-      if (cameraInstance && !isIOS) { cameraInstance.stop(); cameraInstance = null; }
-      // iOS か否かで処理を切り替える
-      if (isIOS) {
-        await startCameraForIOS();
+      if (cameraInstance) { cameraInstance.stop(); cameraInstance = null; }
+      // モバイル（Android または iOS）の場合は getUserMedia を利用、それ以外は MediaPipe Camera Utils を利用
+      if (isIOS || isAndroid) {
+        await startCameraForMobile();
       } else {
-        await startCameraForNonIOS();
+        await startCameraForNonMobile();
       }
     });
 
-    // ページ読み込み時にカメラデバイスを列挙する
+    // ページ読み込み時にカメラを列挙
     enumerateCameras();
   </script>
 </body>
