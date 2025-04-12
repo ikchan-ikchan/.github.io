@@ -2,7 +2,7 @@
 <html>
   <head>
     <meta charset="utf-8">
-    <title>MediaPipe Pose カメラ選択・FPS指定デモ</title>
+    <title>MediaPipe Pose: カメラ切替 & FPS指定 デモ</title>
     <style>
       body {
         font-family: sans-serif;
@@ -19,7 +19,7 @@
     </style>
   </head>
   <body>
-    <h2>MediaPipe Pose カメラ選択 & FPS指定 デモ</h2>
+    <h2>MediaPipe Pose: カメラ切替 & FPS指定 デモ</h2>
     
     <div id="controls">
       <label for="cameraSelect">カメラ選択:</label>
@@ -30,7 +30,7 @@
       <input type="number" id="frameRateInput" min="1" value="30" style="width:60px;">
       
       &nbsp;&nbsp;
-      <button id="startButton">開始</button>
+      <button id="startButton">開始/再起動</button>
     </div>
     
     <!-- 映像表示用 -->
@@ -46,7 +46,7 @@
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
     
     <script>
-      // 各種DOMの参照
+      // 各種 DOM の取得
       const videoElement = document.getElementById('video');
       const canvasElement = document.getElementById('canvas');
       const ctx = canvasElement.getContext('2d');
@@ -57,7 +57,7 @@
       let mpPose = null;
       let camera = null;
 
-      // ① カメラデバイスの列挙
+      // カメラの列挙（利用可能なビデオ入力デバイスをドロップダウンに表示）
       async function enumerateCameras() {
         try {
           const devices = await navigator.mediaDevices.enumerateDevices();
@@ -66,7 +66,6 @@
           videoDevices.forEach((device, idx) => {
             const option = document.createElement('option');
             option.value = device.deviceId;
-            // ラベルが空の場合は "カメラ n" と表示
             option.text = device.label || `カメラ ${idx + 1}`;
             cameraSelect.appendChild(option);
           });
@@ -75,15 +74,13 @@
         }
       }
 
-      // ② MediaPipe Pose の初期化
+      // MediaPipe Pose の初期化
       function initMediaPipePose() {
-        // pose インスタンスを作成。locateFile で必要なファイルパスを指定
         mpPose = new Pose({
           locateFile: (file) => {
             return `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`;
           }
         });
-        // オプション設定（必要に応じて調整）
         mpPose.setOptions({
           modelComplexity: 1,
           smoothLandmarks: true,
@@ -92,29 +89,62 @@
           minDetectionConfidence: 0.5,
           minTrackingConfidence: 0.5
         });
+        // 検出結果を onResults で受け取り描画
         mpPose.onResults(onResults);
       }
 
-      // ③ 検出結果の描画
+      // onResults で検出結果の描画
       function onResults(results) {
-        // Canvas をクリア
+        // Canvas をクリアし背景映像を描画
         ctx.clearRect(0, 0, canvasElement.width, canvasElement.height);
-        // 背景として映像を描画
         ctx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+        
         if (results.poseLandmarks) {
-          // キーポイントを描画 (赤い円)
-          window.drawLandmarks(ctx, results.poseLandmarks, { color: 'red', radius: 5 });
-          // スケルトン（接続線）を描画 (緑色)
+          // キーポイントとスケルトンの基本描画
+          window.drawLandmarks(ctx, results.poseLandmarks, { color: 'red', radius: 4 });
           window.drawConnectors(ctx, results.poseLandmarks, Pose.POSE_CONNECTIONS,
             { color: 'lime', lineWidth: 2 });
+          
+          // 体幹領域（トルソー）の描画
+          // 左肩：11, 右肩：12, 左股関節：23, 右股関節：24
+          const leftShoulder = results.poseLandmarks[11];
+          const rightShoulder = results.poseLandmarks[12];
+          const leftHip = results.poseLandmarks[23];
+          const rightHip = results.poseLandmarks[24];
+          
+          if (leftShoulder && rightShoulder && leftHip && rightHip) {
+            ctx.beginPath();
+            ctx.moveTo(leftShoulder.x * canvasElement.width, leftShoulder.y * canvasElement.height);
+            ctx.lineTo(rightShoulder.x * canvasElement.width, rightShoulder.y * canvasElement.height);
+            ctx.lineTo(rightHip.x * canvasElement.width, rightHip.y * canvasElement.height);
+            ctx.lineTo(leftHip.x * canvasElement.width, leftHip.y * canvasElement.height);
+            ctx.closePath();
+            ctx.fillStyle = 'rgba(0, 0, 255, 0.2)';
+            ctx.fill();
+            ctx.strokeStyle = 'blue';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+          
+            // 両肩の直線から体の向きを算出
+            const dx = (rightShoulder.x - leftShoulder.x) * canvasElement.width;
+            const dy = (rightShoulder.y - leftShoulder.y) * canvasElement.height;
+            const angleRad = Math.atan2(dy, dx);
+            const angleDeg = angleRad * (180 / Math.PI);
+            ctx.font = "20px Arial";
+            ctx.fillStyle = 'yellow';
+            ctx.fillText(`向き: ${angleDeg.toFixed(1)}°`, 10, 30);
+          }
         }
       }
 
-      // ④ カメラの開始
+      // カメラを起動（既存カメラがあれば停止してから再初期化）
       async function startCameraWithMediaPipe() {
+        // 既存のストリームがあれば停止
+        if (camera) {
+          camera.stop();
+        }
         const selectedDeviceId = cameraSelect.value;
         const desiredFps = parseInt(frameRateInput.value) || 30;
-        // MediaPipe Camera Utils は渡す constraints に deviceId などを指定できる
         const constraints = {
           video: {
             deviceId: { exact: selectedDeviceId },
@@ -123,17 +153,16 @@
             frameRate: { ideal: desiredFps }
           }
         };
-        // カメラ生成時に自動で onFrame コールバック経由で mpPose に画像を送る
         camera = new Camera(videoElement, {
           onFrame: async () => {
             await mpPose.send({ image: videoElement });
           },
-          video: constraints.video  // Camera へ渡す映像制約
+          video: constraints.video
         });
         camera.start();
       }
 
-      // ⑤ 開始ボタン押下時の処理
+      // 開始/再起動ボタン押下時の処理
       startButton.addEventListener('click', async () => {
         if (!mpPose) {
           initMediaPipePose();
@@ -141,7 +170,7 @@
         await startCameraWithMediaPipe();
       });
 
-      // ページ読み込み時、カメラデバイスを列挙
+      // ページ読み込み時にカメラを列挙
       enumerateCameras();
     </script>
   </body>
