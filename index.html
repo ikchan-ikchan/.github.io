@@ -33,8 +33,8 @@
     <button id="startButton">開始</button>
   </div>
 
-  <!-- 映像（非表示にして内部処理用） -->
-  <video id="video" width="640" height="480" playsinline style="display:none;"></video>
+  <!-- 映像（内部用：iOS は非表示にして利用） -->
+  <video id="video" width="640" height="480" playsinline style="display: none;"></video>
   <!-- 描画用キャンバス -->
   <canvas id="output_canvas" width="640" height="480"></canvas>
 
@@ -47,10 +47,28 @@
     const frameRateInput = document.getElementById('frameRateInput');
     const startButton = document.getElementById('startButton');
 
-    let cameraInstance = null;       // MediaPipe の Camera インスタンス用
-    let lastFrameTime = Date.now();    // FPS 制御用のタイムスタンプ
+    // MediaPipe Pose の初期化
+    const pose = new Pose({
+      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
+    });
+    pose.setOptions({
+      modelComplexity: 1,
+      smoothLandmarks: true,
+      enableSegmentation: false,
+      smoothSegmentation: false,
+      minDetectionConfidence: 0.5,
+      minTrackingConfidence: 0.5
+    });
+    pose.onResults(onResults);
 
-    // ① カメラデバイスを列挙
+    // グローバル変数
+    let cameraInstance = null;      // MediaPipe Camera Utils 用（非 iOS 用）
+    let detectionLoopId = null;     // iOS 用自作ループで使うタイマーID
+
+    // iOS 判定（iPhone/iPad）
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+
+    // ① カメラデバイスの列挙
     async function enumerateCameras() {
       try {
         const devices = await navigator.mediaDevices.enumerateDevices();
@@ -67,32 +85,15 @@
       }
     }
 
-    // ② MediaPipe Pose の初期化
-    const pose = new Pose({
-      locateFile: (file) => {
-        return `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`;
-      }
-    });
-    pose.setOptions({
-      modelComplexity: 1,
-      smoothLandmarks: true,
-      enableSegmentation: false,
-      smoothSegmentation: false,
-      minDetectionConfidence: 0.5,
-      minTrackingConfidence: 0.5
-    });
-    // 結果が出るたびに onResults() が呼ばれる
-    pose.onResults(onResults);
-
-    // ③ 結果描画関数
+    // ② 結果描画関数（MediaPipe の onResults）
     function onResults(results) {
-      // Canvas をクリアして映像を背景に描画
+      // 描画前にキャンバスをクリア
       canvasCtx.save();
       canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+      // 結果画像（入力映像）を背景に描画
       canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
-      // 骨格（接続線）とキーポイントを描画
       if (results.poseLandmarks) {
-        // Drawing Utils の関数を使用して接続線を描画
+        // Drawing Utils を利用して接続線を描画（グローバル定義済みの POSE_CONNECTIONS を使用）
         drawConnectors(canvasCtx, results.poseLandmarks, POSE_CONNECTIONS,
                        {color: '#00FF00', lineWidth: 4});
         // キーポイント描画
@@ -102,35 +103,71 @@
       canvasCtx.restore();
     }
 
-    // ④ 開始ボタン押下時の処理
-    startButton.addEventListener('click', async () => {
-      // もし既存の Camera インスタンスがあれば停止
-      if (cameraInstance) {
-        cameraInstance.stop();
+    // ③ iOS 用：自前で getUserMedia を呼び出し、FPS 指定の独自ループで推論を実行
+    async function startCameraForIOS() {
+      // 選択されているカメラのラベルから facingMode を決定
+      const selectedLabel = cameraSelect.options[cameraSelect.selectedIndex].text.toLowerCase();
+      // ラベルに "back" または "rear" または "環境" が含まれていれば、環境カメラ（リアカメラ）を指定
+      const facingMode = (selectedLabel.includes("back") || selectedLabel.includes("rear") || selectedLabel.includes("環境"))
+                         ? "environment" : "user";
+      const constraints = {
+        video: {
+          facingMode: { exact: facingMode },
+          width: { ideal: 640 },
+          height: { ideal: 480 }
+        }
+      };
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        videoElement.srcObject = stream;
+        await videoElement.play();
+        // FPS 指定（ms 単位の間隔）
+        const fps = parseInt(frameRateInput.value, 10) || 30;
+        const interval = 1000 / fps;
+        // 自前ループ：指定間隔ごとに pose.send() を呼び出す
+        function detectionLoop() {
+          pose.send({ image: videoElement });
+          detectionLoopId = setTimeout(detectionLoop, interval);
+        }
+        detectionLoop();
+      } catch (err) {
+        console.error("iOS カメラ映像の取得に失敗:", err);
       }
-      // ユーザーが選択したカメラの deviceId と FPS 取得
-      const selectedDeviceId = cameraSelect.value;
-      const fps = parseInt(frameRateInput.value) || 30;
-      // MediaPipe の Camera Utils を利用してカメラ映像を取得
+    }
+
+    // ④ 非 iOS（デスクトップ・Android）の場合：MediaPipe Camera Utils を利用
+    async function startCameraForNonIOS() {
+      const fps = parseInt(frameRateInput.value, 10) || 30;
+      // MediaPipe Camera のオプション：deviceId を指定するとそのカメラを利用
       cameraInstance = new Camera(videoElement, {
-        // FPS 制御：onFrame 内で前回からの時間差を確認
         onFrame: async () => {
-          const now = Date.now();
-          const interval = 1000 / fps;
-          if (now - lastFrameTime >= interval) {
-            lastFrameTime = now;
-            await pose.send({ image: videoElement });
-          }
+          await pose.send({ image: videoElement });
         },
         width: 640,
         height: 480,
-        // deviceId を指定することで選択したカメラから映像を取得
-        deviceId: selectedDeviceId
+        deviceId: cameraSelect.value
       });
-      await cameraInstance.start();
+      try {
+        await cameraInstance.start();
+      } catch (err) {
+        console.error("カメラ映像の取得に失敗:", err);
+      }
+    }
+
+    // ⑤ 「開始」ボタン押下時の処理
+    startButton.addEventListener('click', async () => {
+      // 既存のループがあれば停止する
+      if (detectionLoopId) { clearTimeout(detectionLoopId); detectionLoopId = null; }
+      if (cameraInstance && !isIOS) { cameraInstance.stop(); cameraInstance = null; }
+      // iOS か否かで処理を切り替える
+      if (isIOS) {
+        await startCameraForIOS();
+      } else {
+        await startCameraForNonIOS();
+      }
     });
 
-    // ページ読み込み時にカメラを列挙
+    // ページ読み込み時にカメラデバイスを列挙する
     enumerateCameras();
   </script>
 </body>
