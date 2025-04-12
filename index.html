@@ -1,175 +1,160 @@
 <!DOCTYPE html>
-<html lang="ja">
-<head>
-  <meta charset="UTF-8">
-  <title>MediaPipe Pose カメラ選択 & FPS設定（Android対策）</title>
-  <style>
-    body {
-      font-family: sans-serif;
-      text-align: center;
-    }
-    video, canvas {
-      display: block;
-      margin: 10px auto;
-    }
-    #controls {
-      margin: 10px;
-    }
-  </style>
-  <!-- MediaPipe のライブラリ群の読み込み -->
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils"></script>
-</head>
-<body>
-  <h2>MediaPipe Pose カメラ選択 & FPS設定（Android対策）</h2>
-  <div id="controls">
-    <label for="cameraSelect">カメラ選択:</label>
-    <select id="cameraSelect"></select>
-    &nbsp;&nbsp;
-    <label for="frameRateInput">フレームレート (fps):</label>
-    <input type="number" id="frameRateInput" min="1" value="30" style="width:60px;">
-    &nbsp;&nbsp;
-    <button id="startButton">開始</button>
-  </div>
-
-  <!-- 映像（内部用） -->
-  <video id="video" width="640" height="480" playsinline style="display:none;"></video>
-  <!-- 描画用キャンバス -->
-  <canvas id="output_canvas" width="640" height="480"></canvas>
-
-  <script>
-    // DOM 要素の取得
-    const videoElement = document.getElementById('video');
-    const canvasElement = document.getElementById('output_canvas');
-    const canvasCtx = canvasElement.getContext('2d');
-    const cameraSelect = document.getElementById('cameraSelect');
-    const frameRateInput = document.getElementById('frameRateInput');
-    const startButton = document.getElementById('startButton');
-
-    // MediaPipe Pose の初期化
-    const pose = new Pose({
-      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
-    });
-    pose.setOptions({
-      modelComplexity: 1,
-      smoothLandmarks: true,
-      enableSegmentation: false,
-      smoothSegmentation: false,
-      minDetectionConfidence: 0.5,
-      minTrackingConfidence: 0.5
-    });
-    pose.onResults(onResults);
-
-    // ユーザーエージェントで判定（iOS、Android 判定）
-    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
-    const isAndroid = /Android/.test(navigator.userAgent);
-
-    // グローバル変数
-    let cameraInstance = null;      // デスクトップ向けの MediaPipe Camera Utils 用
-    let detectionLoopId = null;     // モバイル用自前ループのタイマーID
-
-    // ① カメラデバイスの列挙（利用可能な動画入力をドロップダウンに表示）
-    async function enumerateCameras() {
-      try {
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        const videoDevices = devices.filter(device => device.kind === 'videoinput');
-        cameraSelect.innerHTML = "";
-        videoDevices.forEach((device, index) => {
-          const option = document.createElement('option');
-          option.value = device.deviceId;
-          // device label が取得できない場合もあるので、ラベルがあれば表示
-          option.text = device.label || `カメラ ${index + 1}`;
-          cameraSelect.appendChild(option);
-        });
-      } catch (err) {
-        console.error("カメラの列挙に失敗:", err);
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>カメラ選択 & フレームレート指定 PoseNet デモ</title>
+    <style>
+      body {
+        font-family: sans-serif;
+        text-align: center;
       }
-    }
-
-    // ② 結果描画関数：MediaPipe の onResults で呼ばれる
-    function onResults(results) {
-      canvasCtx.save();
-      canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
-      // 入力映像を背景に描画
-      canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
-      if (results.poseLandmarks) {
-        // Drawing Utils の関数で骨格（接続線）を描画
-        drawConnectors(canvasCtx, results.poseLandmarks, POSE_CONNECTIONS,
-                       {color: '#00FF00', lineWidth: 4});
-        // キーポイント描画
-        drawLandmarks(canvasCtx, results.poseLandmarks,
-                      {color: '#FF0000', lineWidth: 2});
+      video, canvas {
+        display: block;
+        margin: 10px auto;
       }
-      canvasCtx.restore();
-    }
+      #controls {
+        margin: 10px;
+      }
+    </style>
+  </head>
+  <body>
+    <h2>カメラ選択 & フレームレート指定 PoseNet デモ</h2>
+    
+    <div id="controls">
+      <label for="cameraSelect">カメラ選択:</label>
+      <select id="cameraSelect"></select>
+      
+      &nbsp;&nbsp;
+      <label for="frameRateInput">フレームレート (fps):</label>
+      <input type="number" id="frameRateInput" min="1" value="15" style="width:60px;">
+      
+      &nbsp;&nbsp;
+      <button id="startButton">開始</button>
+    </div>
+    
+    <!-- カメラ映像 -->
+    <video id="video" width="640" height="480" autoplay muted playsinline></video>
+    <!-- 描画用キャンバス -->
+    <canvas id="canvas" width="640" height="480"></canvas>
+    
+    <!-- TensorFlow.js と PoseNet モデルの読み込み -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/posenet"></script>
+    
+    <script>
+      const video = document.getElementById('video');
+      const canvas = document.getElementById('canvas');
+      const ctx = canvas.getContext('2d');
+      const cameraSelect = document.getElementById('cameraSelect');
+      const frameRateInput = document.getElementById('frameRateInput');
+      const startButton = document.getElementById('startButton');
+      
+      let net = null;
+      let activeStream = null;
+      let poseDetectionLoopId = null;
 
-    // ③ モバイル（Android/iOS）用：getUserMedia を利用してカメラ映像を取得
-    async function startCameraForMobile() {
-      // 選択されたカメラのラベルから facingMode を決定
-      const selectedLabel = cameraSelect.options[cameraSelect.selectedIndex].text.toLowerCase();
-      // ラベルに "back"、"rear"、"環境" などが含まれていれば背面カメラ、それ以外は前面カメラ
-      const facingMode = (selectedLabel.includes("back") || selectedLabel.includes("rear") || selectedLabel.includes("環境"))
-                         ? "environment" : "user";
-      // Android では deviceId 制約は無視されることがあるため、facingMode のみ指定する
-      const constraints = {
-        video: {
-          facingMode: { exact: facingMode },
-          width: { ideal: 640 },
-          height: { ideal: 480 }
+      // ① カメラデバイスを列挙する
+      async function enumerateCameras() {
+        try {
+          const devices = await navigator.mediaDevices.enumerateDevices();
+          // 動画入力のデバイスのみ抽出
+          const videoDevices = devices.filter(device => device.kind === 'videoinput');
+          cameraSelect.innerHTML = "";
+          videoDevices.forEach(device => {
+            const option = document.createElement('option');
+            option.value = device.deviceId;
+            option.text = device.label || `カメラ ${cameraSelect.length + 1}`;
+            cameraSelect.appendChild(option);
+          });
+        } catch (err) {
+          console.error('カメラの列挙に失敗:', err);
         }
-      };
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia(constraints);
-        videoElement.srcObject = stream;
-        await videoElement.play();
-        // FPS 指定
-        const fps = parseInt(frameRateInput.value, 10) || 30;
+      }
+
+      // ② カメラ映像の開始：選択デバイスと指定のフレームレートを適用
+      async function startCamera() {
+        if (activeStream) {
+          activeStream.getTracks().forEach(track => track.stop());
+        }
+        const selectedDeviceId = cameraSelect.value;
+        const frameRate = parseInt(frameRateInput.value) || 15;
+        const constraints = {
+          video: {
+            deviceId: { exact: selectedDeviceId },
+            width: { ideal: 640 },
+            height: { ideal: 480 },
+            frameRate: { ideal: frameRate }
+          }
+        };
+        try {
+          activeStream = await navigator.mediaDevices.getUserMedia(constraints);
+          video.srcObject = activeStream;
+          return new Promise((resolve) => {
+            video.onloadedmetadata = () => {
+              video.play();
+              resolve();
+            };
+          });
+        } catch (err) {
+          console.error('カメラ映像の取得に失敗:', err);
+        }
+      }
+
+      // ③ PoseNet の初期化＆ループ開始
+      async function runPoseNet() {
+        // PoseNet モデルのロード
+        net = await posenet.load();
+        console.log("PoseNet モデルの読み込み完了");
+        
+        // 検出ループ開始（ユーザー指定のfpsに合わせる）
+        const fps = parseInt(frameRateInput.value) || 15;
         const interval = 1000 / fps;
-        function detectionLoop() {
-          pose.send({ image: videoElement });
-          detectionLoopId = setTimeout(detectionLoop, interval);
+        async function detectPose() {
+          // PoseNet による単一人物推定
+          const pose = await net.estimateSinglePose(video, { flipHorizontal: false });
+          drawPose(pose);
+          poseDetectionLoopId = setTimeout(detectPose, interval);
         }
-        detectionLoop();
-      } catch (err) {
-        console.error("モバイル用カメラ映像の取得に失敗:", err);
+        detectPose();
       }
-    }
 
-    // ④ 非モバイル（デスクトップなど）用：MediaPipe Camera Utils を利用
-    async function startCameraForNonMobile() {
-      const fps = parseInt(frameRateInput.value, 10) || 30;
-      // MediaPipe Camera Utils のオプションでは deviceId を指定（PCでは有効な場合が多い）
-      cameraInstance = new Camera(videoElement, {
-        onFrame: async () => {
-          await pose.send({ image: videoElement });
-        },
-        width: 640,
-        height: 480,
-        deviceId: cameraSelect.value
+      // ④ 描画：ビデオ映像とPose結果（キーポイントとスケルトン）をキャンバスへ描画する
+      function drawPose(pose) {
+        // 背景として元の映像を描画
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        // キーポイントの描画（信頼度 0.5 以上）
+        pose.keypoints.forEach(keypoint => {
+          if (keypoint.score > 0.5) {
+            const { x, y } = keypoint.position;
+            ctx.beginPath();
+            ctx.arc(x, y, 5, 0, 2 * Math.PI);
+            ctx.fillStyle = 'red';
+            ctx.fill();
+          }
+        });
+        // スケルトン（隣接キーポイントの線）
+        const adjacentKeyPoints = posenet.getAdjacentKeyPoints(pose.keypoints, 0.5);
+        adjacentKeyPoints.forEach(([keypoint1, keypoint2]) => {
+          ctx.beginPath();
+          ctx.moveTo(keypoint1.position.x, keypoint1.position.y);
+          ctx.lineTo(keypoint2.position.x, keypoint2.position.y);
+          ctx.strokeStyle = 'lime';
+          ctx.lineWidth = 2;
+          ctx.stroke();
+        });
+      }
+
+      // ⑤ 開始ボタン押下時の処理
+      startButton.addEventListener('click', async () => {
+        if (poseDetectionLoopId) {
+          clearTimeout(poseDetectionLoopId);
+        }
+        await startCamera();
+        runPoseNet();
       });
-      try {
-        await cameraInstance.start();
-      } catch (err) {
-        console.error("カメラ映像の取得に失敗:", err);
-      }
-    }
 
-    // ⑤ 「開始」ボタン押下時の処理：環境に合わせてカメラ取得処理を分岐
-    startButton.addEventListener('click', async () => {
-      // 既存のループやストリームを停止
-      if (detectionLoopId) { clearTimeout(detectionLoopId); detectionLoopId = null; }
-      if (cameraInstance) { cameraInstance.stop(); cameraInstance = null; }
-      // モバイル（Android または iOS）の場合は getUserMedia を利用、それ以外は MediaPipe Camera Utils を利用
-      if (isIOS || isAndroid) {
-        await startCameraForMobile();
-      } else {
-        await startCameraForNonMobile();
-      }
-    });
-
-    // ページ読み込み時にカメラを列挙
-    enumerateCameras();
-  </script>
-</body>
+      // ページ読み込み時にカメラを列挙
+      enumerateCameras();
+    </script>
+  </body>
 </html>
