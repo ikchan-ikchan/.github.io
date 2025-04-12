@@ -1,150 +1,137 @@
 <!DOCTYPE html>
-<html>
-  <head>
-    <meta charset="utf-8">
-    <title>MediaPipe Pose カメラ選択・FPS指定デモ</title>
-    <style>
-      body {
-        font-family: sans-serif;
-        text-align: center;
-      }
-      video, canvas {
-        display: block;
-        margin: 10px auto;
-        border: 1px solid #ccc;
-      }
-      #controls {
-        margin: 10px;
-      }
-    </style>
-  </head>
-  <body>
-    <h2>MediaPipe Pose カメラ選択 & FPS指定 デモ</h2>
-    
-    <div id="controls">
-      <label for="cameraSelect">カメラ選択:</label>
-      <select id="cameraSelect"></select>
-      
-      &nbsp;&nbsp;
-      <label for="frameRateInput">フレームレート (fps):</label>
-      <input type="number" id="frameRateInput" min="1" value="30" style="width:60px;">
-      
-      &nbsp;&nbsp;
-      <button id="startButton">開始</button>
-    </div>
-    
-    <!-- 映像表示用 -->
-    <video id="video" width="640" height="480" autoplay muted playsinline></video>
-    <!-- 描画用 Canvas -->
-    <canvas id="canvas" width="640" height="480"></canvas>
-    
-    <!-- MediaPipe Pose 本体 -->
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose"></script>
-    <!-- 描画用ユーティリティ -->
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
-    <!-- カメラ管理用ユーティリティ -->
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
-    
-    <script>
-      // 各種DOMの参照
-      const videoElement = document.getElementById('video');
-      const canvasElement = document.getElementById('canvas');
-      const ctx = canvasElement.getContext('2d');
-      const cameraSelect = document.getElementById('cameraSelect');
-      const frameRateInput = document.getElementById('frameRateInput');
-      const startButton = document.getElementById('startButton');
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>MediaPipe Pose カメラ選択 & FPS設定デモ</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      text-align: center;
+    }
+    video, canvas {
+      display: block;
+      margin: 10px auto;
+    }
+    #controls {
+      margin: 10px;
+    }
+  </style>
+  <!-- MediaPipe Pose、Camera Utils、Drawing Utils の読み込み -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils"></script>
+</head>
+<body>
+  <h2>MediaPipe Pose カメラ選択 & FPS設定デモ</h2>
+  <div id="controls">
+    <label for="cameraSelect">カメラ選択:</label>
+    <select id="cameraSelect"></select>
+    &nbsp;&nbsp;
+    <label for="frameRateInput">フレームレート (fps):</label>
+    <input type="number" id="frameRateInput" min="1" value="30" style="width:60px;">
+    &nbsp;&nbsp;
+    <button id="startButton">開始</button>
+  </div>
 
-      let mpPose = null;
-      let camera = null;
+  <!-- 映像（非表示にして内部処理用） -->
+  <video id="video" width="640" height="480" playsinline style="display:none;"></video>
+  <!-- 描画用キャンバス -->
+  <canvas id="output_canvas" width="640" height="480"></canvas>
 
-      // ① カメラデバイスの列挙
-      async function enumerateCameras() {
-        try {
-          const devices = await navigator.mediaDevices.enumerateDevices();
-          const videoDevices = devices.filter(device => device.kind === 'videoinput');
-          cameraSelect.innerHTML = "";
-          videoDevices.forEach((device, idx) => {
-            const option = document.createElement('option');
-            option.value = device.deviceId;
-            // ラベルが空の場合は "カメラ n" と表示
-            option.text = device.label || `カメラ ${idx + 1}`;
-            cameraSelect.appendChild(option);
-          });
-        } catch (err) {
-          console.error('カメラ列挙エラー:', err);
-        }
+  <script>
+    // DOM 要素の取得
+    const videoElement = document.getElementById('video');
+    const canvasElement = document.getElementById('output_canvas');
+    const canvasCtx = canvasElement.getContext('2d');
+    const cameraSelect = document.getElementById('cameraSelect');
+    const frameRateInput = document.getElementById('frameRateInput');
+    const startButton = document.getElementById('startButton');
+
+    let cameraInstance = null;       // MediaPipe の Camera インスタンス用
+    let lastFrameTime = Date.now();    // FPS 制御用のタイムスタンプ
+
+    // ① カメラデバイスを列挙
+    async function enumerateCameras() {
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const videoDevices = devices.filter(device => device.kind === 'videoinput');
+        cameraSelect.innerHTML = "";
+        videoDevices.forEach((device, index) => {
+          const option = document.createElement('option');
+          option.value = device.deviceId;
+          option.text = device.label || `カメラ ${index + 1}`;
+          cameraSelect.appendChild(option);
+        });
+      } catch (err) {
+        console.error("カメラの列挙に失敗:", err);
       }
+    }
 
-      // ② MediaPipe Pose の初期化
-      function initMediaPipePose() {
-        mpPose = new Pose({
-          locateFile: (file) => {
-            return `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`;
+    // ② MediaPipe Pose の初期化
+    const pose = new Pose({
+      locateFile: (file) => {
+        return `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`;
+      }
+    });
+    pose.setOptions({
+      modelComplexity: 1,
+      smoothLandmarks: true,
+      enableSegmentation: false,
+      smoothSegmentation: false,
+      minDetectionConfidence: 0.5,
+      minTrackingConfidence: 0.5
+    });
+    // 結果が出るたびに onResults() が呼ばれる
+    pose.onResults(onResults);
+
+    // ③ 結果描画関数
+    function onResults(results) {
+      // Canvas をクリアして映像を背景に描画
+      canvasCtx.save();
+      canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+      canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+      // 骨格（接続線）とキーポイントを描画
+      if (results.poseLandmarks) {
+        // Drawing Utils の関数を使用して接続線を描画
+        drawConnectors(canvasCtx, results.poseLandmarks, POSE_CONNECTIONS,
+                       {color: '#00FF00', lineWidth: 4});
+        // キーポイント描画
+        drawLandmarks(canvasCtx, results.poseLandmarks,
+                      {color: '#FF0000', lineWidth: 2});
+      }
+      canvasCtx.restore();
+    }
+
+    // ④ 開始ボタン押下時の処理
+    startButton.addEventListener('click', async () => {
+      // もし既存の Camera インスタンスがあれば停止
+      if (cameraInstance) {
+        cameraInstance.stop();
+      }
+      // ユーザーが選択したカメラの deviceId と FPS 取得
+      const selectedDeviceId = cameraSelect.value;
+      const fps = parseInt(frameRateInput.value) || 30;
+      // MediaPipe の Camera Utils を利用してカメラ映像を取得
+      cameraInstance = new Camera(videoElement, {
+        // FPS 制御：onFrame 内で前回からの時間差を確認
+        onFrame: async () => {
+          const now = Date.now();
+          const interval = 1000 / fps;
+          if (now - lastFrameTime >= interval) {
+            lastFrameTime = now;
+            await pose.send({ image: videoElement });
           }
-        });
-        mpPose.setOptions({
-          modelComplexity: 1,
-          smoothLandmarks: true,
-          enableSegmentation: false,
-          smoothSegmentation: false,
-          minDetectionConfidence: 0.5,
-          minTrackingConfidence: 0.5
-        });
-        mpPose.onResults(onResults);
-      }
-
-      // ③ 検出結果の描画
-      function onResults(results) {
-        // Canvas をクリア
-        ctx.clearRect(0, 0, canvasElement.width, canvasElement.height);
-        // 背景として映像を描画
-        ctx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
-        if (results.poseLandmarks) {
-          // キーポイントを描画 (赤い円)
-          window.drawLandmarks(ctx, results.poseLandmarks, { color: 'red', radius: 5 });
-          // スケルトン（接続線）を描画 (緑色)
-          window.drawConnectors(ctx, results.poseLandmarks, Pose.POSE_CONNECTIONS,
-            { color: 'lime', lineWidth: 2 });
-        }
-      }
-
-      // ④ カメラの開始
-      async function startCameraWithMediaPipe() {
-        const selectedDeviceId = cameraSelect.value;
-        const desiredFps = parseInt(frameRateInput.value) || 30;
-        const constraints = {
-          video: {
-            deviceId: { exact: selectedDeviceId },
-            width: { ideal: 640 },
-            height: { ideal: 480 },
-            frameRate: { ideal: desiredFps }
-          }
-        };
-        // MediaPipe Camera Utils によるカメラ初期化
-        camera = new Camera(videoElement, {
-          onFrame: async () => {
-            await mpPose.send({ image: videoElement });
-          },
-          video: constraints.video
-        });
-        camera.start();
-      }
-
-      // ⑤ 開始ボタン押下時の処理（カメラ切り替えに対応）
-      startButton.addEventListener('click', async () => {
-        // 既にカメラが起動している場合は停止してから再起動する
-        if (camera) {
-          camera.stop();
-          camera = null;
-        }
-        if (!mpPose) {
-          initMediaPipePose();
-        }
-        await startCameraWithMediaPipe();
+        },
+        width: 640,
+        height: 480,
+        // deviceId を指定することで選択したカメラから映像を取得
+        deviceId: selectedDeviceId
       });
+      await cameraInstance.start();
+    });
 
-      // ページ読み込み時にカメラデバイスを列挙
-      enumerateCameras();
-    </script>
-  </body>
+    // ページ読み込み時にカメラを列挙
+    enumerateCameras();
+  </script>
+</body>
 </html>
