@@ -2,69 +2,56 @@
 <html>
   <head>
     <meta charset="UTF-8">
-    <title>MediaPipe Pose: カメラ選択, FPS, 解像度指定デモ（解像度更新版）</title>
+    <title>MediaPipe Pose 3D ビュー＋視点操作デモ</title>
     <style>
       body { font-family: sans-serif; text-align: center; }
-      video, canvas { display: block; margin: 10px auto; }
-      #controls { margin: 10px; }
-      #maxResolutionInfo { margin-top: 5px; font-size: 0.9em; color: #555; }
+      video, canvas, #threejsContainer {
+        display: block; margin: 10px auto;
+      }
+      #controls {
+        margin: 10px;
+      }
+      #outputCanvas {
+        border: 1px solid #ccc;
+      }
+      #threejsContainer {
+        width: 640px;
+        height: 480px;
+        border: 1px solid #ccc;
+      }
     </style>
   </head>
   <body>
-    <h2>MediaPipe Pose: カメラ選択, FPS, 解像度指定デモ</h2>
-    <div id="controls">
-      <label for="cameraSelect">カメラ選択:</label>
-      <select id="cameraSelect"></select>
-      &nbsp;&nbsp;
-      <label for="frameRateInput">フレームレート (fps):</label>
-      <input type="number" id="frameRateInput" min="1" value="15" style="width:60px;">
-      &nbsp;&nbsp;
-      <label for="resPercentInput">解像度 (%):</label>
-      <input type="number" id="resPercentInput" min="1" max="100" value="100" style="width:60px;">
-      &nbsp;&nbsp;
-      <button id="startButton">開始</button>
-      <div id="maxResolutionInfo"></div>
-    </div>
+    <h2>MediaPipe Pose 3D ビュー & 視点操作デモ</h2>
     
-    <!-- カメラ映像（内部利用：Canvas に描画） -->
-    <video id="video" autoplay muted playsinline style="display:none;"></video>
-    <!-- 描画用キャンバス -->
-    <canvas id="outputCanvas"></canvas>
+    <!-- 上部：MediaPipe Pose による映像と2Dオーバーレイ描画 -->
+    <video id="video" width="640" height="480" autoplay muted playsinline style="display:none;"></video>
+    <canvas id="outputCanvas" width="640" height="480"></canvas>
+    
+    <!-- 下部：three.js を用いた3Dビューワ -->
+    <div id="threejsContainer"></div>
     
     <!-- MediaPipe Pose と Drawing Utils の読み込み -->
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
     
+    <!-- three.js と OrbitControls の読み込み -->
+    <script src="https://cdn.jsdelivr.net/npm/three@0.150.1/build/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.150.1/examples/js/controls/OrbitControls.js"></script>
+    
     <script>
+      // DOM 要素の取得
       const video = document.getElementById('video');
       const outputCanvas = document.getElementById('outputCanvas');
       const canvasCtx = outputCanvas.getContext('2d');
-      const cameraSelect = document.getElementById('cameraSelect');
-      const frameRateInput = document.getElementById('frameRateInput');
-      const resPercentInput = document.getElementById('resPercentInput');
-      const startButton = document.getElementById('startButton');
-      const maxResolutionInfo = document.getElementById('maxResolutionInfo');
-      
+      const threejsContainer = document.getElementById('threejsContainer');
+
+      // MediaPipe Pose のインスタンス
       let pose = null;
-      
-      // ① 利用可能なカメラを列挙する
-      async function enumerateCameras() {
-        try {
-          const devices = await navigator.mediaDevices.enumerateDevices();
-          const videoDevices = devices.filter(device => device.kind === 'videoinput');
-          cameraSelect.innerHTML = '';
-          videoDevices.forEach((device, index) => {
-            const option = document.createElement('option');
-            option.value = device.deviceId;
-            option.text = device.label || `カメラ ${index + 1}`;
-            cameraSelect.appendChild(option);
-          });
-        } catch (error) {
-          console.error('カメラの列挙に失敗:', error);
-        }
-      }
-      
-      // ② MediaPipe Pose の初期化
+      // 最新のポーズ検出結果（ランドマーク配列）
+      let currentPoseLandmarks = null;
+
+      // --- MediaPipe Pose の初期化 ---
       function initializePose() {
         pose = new Pose({
           locateFile: (file) => {
@@ -79,91 +66,163 @@
         });
         pose.onResults(onResults);
       }
-      
-      // ③ 結果を Canvas に描画するコールバック
+
+      // --- onResults コールバック ---
       function onResults(results) {
+        // 2D 描画: 映像背景＋2Dでポーズ描画
         canvasCtx.save();
         canvasCtx.clearRect(0, 0, outputCanvas.width, outputCanvas.height);
         canvasCtx.drawImage(results.image, 0, 0, outputCanvas.width, outputCanvas.height);
         if (results.poseLandmarks) {
-          drawConnectors(canvasCtx, results.poseLandmarks, Pose.POSE_CONNECTIONS, { color: 'lime', lineWidth: 2 });
-          drawLandmarks(canvasCtx, results.poseLandmarks, { color: 'red', lineWidth: 1 });
+          // 2D オーバーレイ（MediaPipe 標準の描画）
+          drawConnectors(canvasCtx, results.poseLandmarks, Pose.POSE_CONNECTIONS, {color: 'lime', lineWidth: 2});
+          drawLandmarks(canvasCtx, results.poseLandmarks, {color: 'red', lineWidth: 1});
+          // ここで最新のランドマークを保存（3D 用）
+          currentPoseLandmarks = results.poseLandmarks;
+          // 更新時に3D 表示も更新
+          updateThreeScene(currentPoseLandmarks);
         }
         canvasCtx.restore();
       }
-      
-      // ④ 選択したカメラで、最大解像度の何％かを指定して映像を取得する
+
+      // --- getUserMedia を用いたカメラ取得 ---
       async function startCamera() {
-        const selectedDeviceId = cameraSelect.value;
-        // まずは制約なしでストリームを取得して capabilities を調べる
-        const tempConstraints = { video: { deviceId: { exact: selectedDeviceId } } };
-        let tempStream;
         try {
-          tempStream = await navigator.mediaDevices.getUserMedia(tempConstraints);
-        } catch (error) {
-          console.error('初回ストリームの取得に失敗:', error);
-          return;
-        }
-        
-        const videoTrack = tempStream.getVideoTracks()[0];
-        const capabilities = videoTrack.getCapabilities();
-        let maxWidth = (capabilities.width && capabilities.width.max) || 640;
-        let maxHeight = (capabilities.height && capabilities.height.max) || 480;
-        maxResolutionInfo.innerText = `このカメラの最大解像度: ${maxWidth} x ${maxHeight}`;
-        tempStream.getTracks().forEach(track => track.stop());
-        
-        const resPercent = parseInt(resPercentInput.value) || 100;
-        const desiredWidth = Math.floor(maxWidth * (resPercent / 100));
-        const desiredHeight = Math.floor(maxHeight * (resPercent / 100));
-        const frameRate = parseInt(frameRateInput.value) || 15;
-        
-        // 下記では「exact」を使って厳密に解像度指定（変更可能な場合のみ反映されます）
-        const constraints = {
-          video: {
-            deviceId: { exact: selectedDeviceId },
-            width: { exact: desiredWidth },
-            height: { exact: desiredHeight },
-            frameRate: { ideal: frameRate }
-          }
-        };
-        try {
-          const stream = await navigator.mediaDevices.getUserMedia(constraints);
+          const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
           video.srcObject = stream;
           return new Promise(resolve => {
             video.onloadedmetadata = () => {
-              // 取得した解像度に合わせてキャンバスサイズも更新
-              outputCanvas.width = video.videoWidth;
-              outputCanvas.height = video.videoHeight;
               video.play();
               resolve();
             };
           });
-        } catch (error) {
-          console.error('カメラ映像の取得に失敗:', error);
+        } catch (err) {
+          console.error("カメラ映像の取得に失敗:", err);
         }
       }
-      
-      // ⑤ 映像フレームを MediaPipe Pose に送信するループ
+
+      // --- MediaPipe Pose に映像を送るループ ---
       async function processVideo() {
-        const frameRate = parseInt(frameRateInput.value) || 15;
-        const interval = 1000 / frameRate;
         async function sendFrame() {
           if (!video.paused && !video.ended) {
             await pose.send({ image: video });
           }
-          setTimeout(sendFrame, interval);
+          requestAnimationFrame(sendFrame);
         }
         sendFrame();
       }
-      
-      // ⑥ スタートボタン押下時の処理
-      startButton.addEventListener('click', async () => {
+
+      // --- three.js のシーン作成 ---
+      let scene, camera, renderer, controls;
+      let landmarkGroup; // ランドマーク点と線をまとめるグループ
+
+      function initThreeJS() {
+        // シーン
+        scene = new THREE.Scene();
+        scene.background = new THREE.Color(0xffffff);
+
+        // カメラ (PerspectiveCamera)
+        const fov = 75;
+        const aspect = threejsContainer.clientWidth / threejsContainer.clientHeight;
+        const near = 0.1;
+        const far = 1000;
+        camera = new THREE.PerspectiveCamera(fov, aspect, near, far);
+        camera.position.set(0, 0, 2);
+
+        // レンダラー
+        renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(threejsContainer.clientWidth, threejsContainer.clientHeight);
+        threejsContainer.innerHTML = ""; // 既存の DOM クリア
+        threejsContainer.appendChild(renderer.domElement);
+
+        // OrbitControls（視点操作用）
+        controls = new THREE.OrbitControls(camera, renderer.domElement);
+
+        // ランドマーク用グループを作成
+        landmarkGroup = new THREE.Group();
+        scene.add(landmarkGroup);
+
+        // 簡単なライト
+        const light = new THREE.DirectionalLight(0xffffff, 1);
+        light.position.set(0, 0, 2).normalize();
+        scene.add(light);
+
+        // アニメーションループの開始
+        animate();
+      }
+
+      // --- three.js のアニメーションループ ---
+      function animate() {
+        requestAnimationFrame(animate);
+        controls.update();
+        renderer.render(scene, camera);
+      }
+
+      // --- MediaPipe Pose の 3D ランドマークを three.js で更新する ---  
+      // ここでは各ランドマークは { x, y, z } を持ち、x,y は [0,1] の正規化座標、z は相対値です。  
+      // ※ 転置処理：2D の原点 (0,0) が左上の場合と three.js での座標系は異なるため調整が必要です。
+      function updateThreeScene(landmarks) {
+        // まずはグループをクリア
+        while (landmarkGroup.children.length) {
+          landmarkGroup.remove(landmarkGroup.children[0]);
+        }
+
+        const geometry = new THREE.BufferGeometry();
+        // 3D 用に変換：x,yは [0,1] で、中心を (0,0) にするため -0.5 をする；z はスケールをかける
+        const scaleFactor = 2; // 視認性向上のための拡大率（必要に応じて調整）
+        const positions = [];
+        for (let i = 0; i < landmarks.length; i++) {
+          const lm = landmarks[i];
+          const x = (lm.x - 0.5) * scaleFactor;  // 左右中央に配置
+          const y = -(lm.y - 0.5) * scaleFactor; // 上下反転して中央に配置
+          const z = lm.z * scaleFactor;          // z はそのまま（必要に応じてスケール調整）
+          positions.push(x, y, z);
+        }
+        geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+
+        // 各ランドマークを表す小さな球体で描画
+        const sphereMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+        const sphereGeometry = new THREE.SphereGeometry(0.02, 8, 8);
+        for (let i = 0; i < positions.length; i += 3) {
+          const sphere = new THREE.Mesh(sphereGeometry, sphereMaterial);
+          sphere.position.set(positions[i], positions[i + 1], positions[i + 2]);
+          landmarkGroup.add(sphere);
+        }
+
+        // ※ 接続線を描画する場合：MediaPipe Pose の接続情報（Pose.POSE_CONNECTIONS）を元に線を描画できます
+        // ここではシンプルに各点のみを表示していますが、下記のような処理も可能です。
+        const lineMaterial = new THREE.LineBasicMaterial({ color: 0x00ff00 });
+        Pose.POSE_CONNECTIONS.forEach(pair => {
+          const idxA = pair[0], idxB = pair[1];
+          if (landmarks[idxA] && landmarks[idxB]) {
+            const geom = new THREE.BufferGeometry();
+            const pointA = new THREE.Vector3(
+              (landmarks[idxA].x - 0.5) * scaleFactor,
+              -(landmarks[idxA].y - 0.5) * scaleFactor,
+              landmarks[idxA].z * scaleFactor
+            );
+            const pointB = new THREE.Vector3(
+              (landmarks[idxB].x - 0.5) * scaleFactor,
+              -(landmarks[idxB].y - 0.5) * scaleFactor,
+              landmarks[idxB].z * scaleFactor
+            );
+            geom.setFromPoints([pointA, pointB]);
+            const line = new THREE.Line(geom, lineMaterial);
+            landmarkGroup.add(line);
+          }
+        });
+      }
+
+      // --- 初期化 ---
+      async function init() {
         await startCamera();
         initializePose();
         processVideo();
-      });
-      
-      enumerateCameras();
+        initThreeJS();
+      }
+
+      // ページ読み込み後に初期化実行
+      window.addEventListener('load', init);
     </script>
   </body>
 </html>
