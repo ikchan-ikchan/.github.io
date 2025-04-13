@@ -2,28 +2,16 @@
 <html>
   <head>
     <meta charset="UTF-8">
-    <title>MediaPipe Pose: カメラ選択, フレームレート, 解像度指定デモ</title>
+    <title>MediaPipe Pose: カメラ選択, FPS, 解像度指定デモ（解像度更新版）</title>
     <style>
-      body {
-        font-family: sans-serif;
-        text-align: center;
-      }
-      video, canvas {
-        display: block;
-        margin: 10px auto;
-      }
-      #controls {
-        margin: 10px;
-      }
-      #maxResolutionInfo {
-        margin-top: 5px;
-        font-size: 0.9em;
-        color: #555;
-      }
+      body { font-family: sans-serif; text-align: center; }
+      video, canvas { display: block; margin: 10px auto; }
+      #controls { margin: 10px; }
+      #maxResolutionInfo { margin-top: 5px; font-size: 0.9em; color: #555; }
     </style>
   </head>
   <body>
-    <h2>MediaPipe Pose: カメラ選択, フレームレート, 解像度指定デモ</h2>
+    <h2>MediaPipe Pose: カメラ選択, FPS, 解像度指定デモ</h2>
     <div id="controls">
       <label for="cameraSelect">カメラ選択:</label>
       <select id="cameraSelect"></select>
@@ -38,10 +26,10 @@
       <div id="maxResolutionInfo"></div>
     </div>
     
-    <!-- カメラ映像（内部利用：表示は Canvas に描画） -->
+    <!-- カメラ映像（内部利用：Canvas に描画） -->
     <video id="video" autoplay muted playsinline style="display:none;"></video>
     <!-- 描画用キャンバス -->
-    <canvas id="outputCanvas" width="640" height="480"></canvas>
+    <canvas id="outputCanvas"></canvas>
     
     <!-- MediaPipe Pose と Drawing Utils の読み込み -->
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
@@ -57,8 +45,7 @@
       const startButton = document.getElementById('startButton');
       const maxResolutionInfo = document.getElementById('maxResolutionInfo');
       
-      let pose = null;         // MediaPipe Pose インスタンス
-      let processingLoopId = null;
+      let pose = null;
       
       // ① 利用可能なカメラを列挙する
       async function enumerateCameras() {
@@ -90,7 +77,6 @@
           minDetectionConfidence: 0.5,
           minTrackingConfidence: 0.5
         });
-        // onResults コールバックで描画を実行
         pose.onResults(onResults);
       }
       
@@ -98,22 +84,18 @@
       function onResults(results) {
         canvasCtx.save();
         canvasCtx.clearRect(0, 0, outputCanvas.width, outputCanvas.height);
-        // 背景に入力画像（映像）を描画
         canvasCtx.drawImage(results.image, 0, 0, outputCanvas.width, outputCanvas.height);
         if (results.poseLandmarks) {
-          // キーポイント間の接続（スケルトン）を描画
           drawConnectors(canvasCtx, results.poseLandmarks, Pose.POSE_CONNECTIONS, { color: 'lime', lineWidth: 2 });
-          // 各キーポイントの描画
           drawLandmarks(canvasCtx, results.poseLandmarks, { color: 'red', lineWidth: 1 });
         }
         canvasCtx.restore();
       }
       
-      // ④ 選択したカメラで、最大解像度からユーザー指定の%解像度で映像を取得する
+      // ④ 選択したカメラで、最大解像度の何％かを指定して映像を取得する
       async function startCamera() {
         const selectedDeviceId = cameraSelect.value;
-        
-        // ※ まず制約なし（または最小限）の getUserMedia でストリームを取得し、最大解像度を取得
+        // まずは制約なしでストリームを取得して capabilities を調べる
         const tempConstraints = { video: { deviceId: { exact: selectedDeviceId } } };
         let tempStream;
         try {
@@ -125,29 +107,22 @@
         
         const videoTrack = tempStream.getVideoTracks()[0];
         const capabilities = videoTrack.getCapabilities();
-        // capabilities.width/height が取得できれば、最大値を利用
         let maxWidth = (capabilities.width && capabilities.width.max) || 640;
         let maxHeight = (capabilities.height && capabilities.height.max) || 480;
         maxResolutionInfo.innerText = `このカメラの最大解像度: ${maxWidth} x ${maxHeight}`;
-        
-        // ステップ：一度取得したストリームは停止
         tempStream.getTracks().forEach(track => track.stop());
         
-        // ユーザー指定の解像度パーセンテージ（例：100%、50% など）
         const resPercent = parseInt(resPercentInput.value) || 100;
-        // 実際に使用する解像度
         const desiredWidth = Math.floor(maxWidth * (resPercent / 100));
         const desiredHeight = Math.floor(maxHeight * (resPercent / 100));
-        
-        // フレームレートの取得
         const frameRate = parseInt(frameRateInput.value) || 15;
         
-        // 再度 getUserMedia を、算出した解像度・fpsで呼び出す
+        // 下記では「exact」を使って厳密に解像度指定（変更可能な場合のみ反映されます）
         const constraints = {
           video: {
             deviceId: { exact: selectedDeviceId },
-            width: { ideal: desiredWidth },
-            height: { ideal: desiredHeight },
+            width: { exact: desiredWidth },
+            height: { exact: desiredHeight },
             frameRate: { ideal: frameRate }
           }
         };
@@ -156,12 +131,15 @@
           video.srcObject = stream;
           return new Promise(resolve => {
             video.onloadedmetadata = () => {
+              // 取得した解像度に合わせてキャンバスサイズも更新
+              outputCanvas.width = video.videoWidth;
+              outputCanvas.height = video.videoHeight;
               video.play();
               resolve();
             };
           });
         } catch (error) {
-          console.error('最終的なカメラ映像の取得に失敗:', error);
+          console.error('カメラ映像の取得に失敗:', error);
         }
       }
       
@@ -180,15 +158,11 @@
       
       // ⑥ スタートボタン押下時の処理
       startButton.addEventListener('click', async () => {
-        if (processingLoopId) {
-          clearTimeout(processingLoopId);
-        }
         await startCamera();
         initializePose();
         processVideo();
       });
       
-      // ページ読み込み時にカメラを列挙
       enumerateCameras();
     </script>
   </body>
