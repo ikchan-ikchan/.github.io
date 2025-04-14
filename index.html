@@ -246,7 +246,7 @@
           // まず 3D 表示領域に「処理中」と表示
           threeContainer.innerHTML = "<h3 style='text-align:center;margin-top:40%'>処理中</h3>";
           console.log("Displayed '処理中'.");
-          // 500ms 遅延後に 3D 描画を開始（必要に応じて遅延時間を調整）
+          // 500ms 遅延後に 3D 描画を開始（遅延時間は必要に応じて調整）
           setTimeout(() => {
             console.log("Calling render3DPose.");
             render3DPose(latestPoseResult.poseLandmarks);
@@ -271,8 +271,8 @@
         renderer.setSize(width, height);
         threeContainer.appendChild(renderer.domElement);
         
-        // OrbitControls で視点操作可能に
-        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        // OrbitControls を使用（THREE.OrbitControls → OrbitControls に変更）
+        const controls = new OrbitControls(camera, renderer.domElement);
         
         // MediaPipe のランドマークは x,y ∈ [0,1] なので、キャンバスサイズを基に中心を 0 に変換
         // z は相対値なので適宜スケール（ここでは 500 倍）
