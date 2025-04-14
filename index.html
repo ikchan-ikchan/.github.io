@@ -2,21 +2,35 @@
 <html>
   <head>
     <meta charset="UTF-8">
-    <title>MediaPipe Pose: カメラ選択, FPS, 解像度指定 & キャプチャ（3D視点切替）デモ</title>
+    <title>MediaPipe Pose: カメラ選択, FPS, 解像度指定、記録デモ</title>
     <style>
-      body { font-family: sans-serif; text-align: center; }
-      video, canvas { display: block; margin: 10px auto; }
-      #controls { margin: 10px; }
-      #maxResolutionInfo { margin-top: 5px; font-size: 0.9em; color: #555; }
-      /* 3D表示領域 */
-      #threeContainer { width: 640px; height: 480px; margin: 10px auto; border: 1px solid #ccc; }
+      body {
+        font-family: sans-serif;
+        text-align: center;
+      }
+      video, canvas {
+        display: block;
+        margin: 10px auto;
+      }
+      #controls {
+        margin: 10px;
+      }
+      #maxResolutionInfo {
+        margin-top: 5px;
+        font-size: 0.9em;
+        color: #555;
+      }
+      #landmarksOutput {
+        margin-top: 10px;
+        font-size: 0.9em;
+        color: #333;
+        text-align: left;
+        display: inline-block;
+      }
     </style>
-    <!-- Three.js & OrbitControls（バージョンは適宜更新） -->
-    <script src="https://cdn.jsdelivr.net/npm/three@0.155.0/build/three.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.155.0/examples/js/controls/OrbitControls.js"></script>
   </head>
   <body>
-    <h2>MediaPipe Pose: カメラ選択, FPS, 解像度指定 & キャプチャデモ</h2>
+    <h2>MediaPipe Pose: カメラ選択, FPS, 解像度指定、記録デモ</h2>
     <div id="controls">
       <label for="cameraSelect">カメラ選択:</label>
       <select id="cameraSelect"></select>
@@ -29,23 +43,25 @@
       &nbsp;&nbsp;
       <button id="startButton">開始</button>
       &nbsp;&nbsp;
-      <button id="captureButton">キャプチャ</button>
+      <!-- 新たに記録ボタンを追加 -->
+      <button id="recordButton">記録</button>
       <div id="maxResolutionInfo"></div>
     </div>
     
-    <!-- カメラ映像（MediaPipe 用、画面には表示しない） -->
+    <!-- カメラ映像（内部利用：Canvas に描画） -->
     <video id="video" autoplay muted playsinline style="display:none;"></video>
-    <!-- Pose検出結果の 2D 描画用キャンバス -->
+    <!-- 描画用キャンバス -->
     <canvas id="outputCanvas"></canvas>
-    <!-- 3D 表示領域（キャプチャしたスナップショットをここに描画） -->
-    <div id="threeContainer"></div>
+    
+    <!-- 記録結果（ランドマークの x, y, z 座標）を表示する領域 -->
+    <div id="landmarksOutput"></div>
     
     <!-- MediaPipe Pose と Drawing Utils の読み込み -->
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
     
     <script>
-      // 各種 DOM 要素
+      // 要素取得
       const video = document.getElementById('video');
       const outputCanvas = document.getElementById('outputCanvas');
       const canvasCtx = outputCanvas.getContext('2d');
@@ -53,14 +69,14 @@
       const frameRateInput = document.getElementById('frameRateInput');
       const resPercentInput = document.getElementById('resPercentInput');
       const startButton = document.getElementById('startButton');
-      const captureButton = document.getElementById('captureButton');
+      const recordButton = document.getElementById('recordButton');
       const maxResolutionInfo = document.getElementById('maxResolutionInfo');
-      const threeContainer = document.getElementById('threeContainer');
+      const landmarksOutput = document.getElementById('landmarksOutput');
+
+      let pose = null;
+      let latestLandmarks = null; // 最新の検出結果を保持（各ランドマークの x, y, z）
       
-      let pose = null;                // MediaPipe Pose インスタンス
-      let lastPoseLandmarks = null;   // 最新の pose 出力（3D座標付き）
-      
-      // ① カメラデバイスの列挙
+      // ① 利用可能なカメラを列挙する
       async function enumerateCameras() {
         try {
           const devices = await navigator.mediaDevices.enumerateDevices();
@@ -90,25 +106,29 @@
           minDetectionConfidence: 0.5,
           minTrackingConfidence: 0.5
         });
-        // onResults で2D描画＋最新の3D結果を保持
-        pose.onResults(results => {
-          canvasCtx.save();
-          canvasCtx.clearRect(0, 0, outputCanvas.width, outputCanvas.height);
-          canvasCtx.drawImage(results.image, 0, 0, outputCanvas.width, outputCanvas.height);
-          if (results.poseLandmarks) {
-            drawConnectors(canvasCtx, results.poseLandmarks, Pose.POSE_CONNECTIONS, { color: 'lime', lineWidth: 2 });
-            drawLandmarks(canvasCtx, results.poseLandmarks, { color: 'red', lineWidth: 1 });
-            // ここで最新結果を保存（各ランドマークは {x, y, z, visibility}）
-            lastPoseLandmarks = results.poseLandmarks;
-          }
-          canvasCtx.restore();
-        });
+        // onResults コールバック内で描画および最新結果の更新を実施
+        pose.onResults(onResults);
       }
       
-      // ③ カメラ起動：まず一度最小限の制約でストリーム取得し、capabilities から最大解像度を取得してから希望の解像度で再取得
+      // ③ 結果を Canvas に描画するコールバック
+      function onResults(results) {
+        canvasCtx.save();
+        canvasCtx.clearRect(0, 0, outputCanvas.width, outputCanvas.height);
+        canvasCtx.drawImage(results.image, 0, 0, outputCanvas.width, outputCanvas.height);
+        if (results.poseLandmarks) {
+          // スケルトンおよびランドマークの描画
+          drawConnectors(canvasCtx, results.poseLandmarks, Pose.POSE_CONNECTIONS, { color: 'lime', lineWidth: 2 });
+          drawLandmarks(canvasCtx, results.poseLandmarks, { color: 'red', lineWidth: 1 });
+          // 最新のランドマーク結果を更新（各ランドマークは x, y, z, [visibility] のプロパティを持つ）
+          latestLandmarks = results.poseLandmarks;
+        }
+        canvasCtx.restore();
+      }
+      
+      // ④ 選択したカメラで、最大解像度の何％かを指定して映像を取得する
       async function startCamera() {
         const selectedDeviceId = cameraSelect.value;
-        // 一度制約なしでストリーム取得（最大解像度調査用）
+        // まずは制約なしでストリームを取得して capabilities を調べる
         const tempConstraints = { video: { deviceId: { exact: selectedDeviceId } } };
         let tempStream;
         try {
@@ -117,19 +137,20 @@
           console.error('初回ストリームの取得に失敗:', error);
           return;
         }
+        
         const videoTrack = tempStream.getVideoTracks()[0];
         const capabilities = videoTrack.getCapabilities();
         let maxWidth = (capabilities.width && capabilities.width.max) || 640;
         let maxHeight = (capabilities.height && capabilities.height.max) || 480;
         maxResolutionInfo.innerText = `このカメラの最大解像度: ${maxWidth} x ${maxHeight}`;
-        // 取得したストリームは停止する
         tempStream.getTracks().forEach(track => track.stop());
-        // ユーザー指定の解像度 %
+        
         const resPercent = parseInt(resPercentInput.value) || 100;
         const desiredWidth = Math.floor(maxWidth * (resPercent / 100));
         const desiredHeight = Math.floor(maxHeight * (resPercent / 100));
         const frameRate = parseInt(frameRateInput.value) || 15;
-        // 厳密な解像度指定（exact）により取得
+        
+        // 厳密に解像度指定するため exact を使用
         const constraints = {
           video: {
             deviceId: { exact: selectedDeviceId },
@@ -143,7 +164,7 @@
           video.srcObject = stream;
           return new Promise(resolve => {
             video.onloadedmetadata = () => {
-              // video の取得解像度に合わせて Canvas サイズ更新
+              // 取得した映像の解像度に合わせてキャンバスサイズを更新
               outputCanvas.width = video.videoWidth;
               outputCanvas.height = video.videoHeight;
               video.play();
@@ -155,7 +176,7 @@
         }
       }
       
-      // ④ MediaPipe Pose 用ループ（指定 FPS に合わせてフレーム送信）
+      // ⑤ 映像フレームを MediaPipe Pose に送信するループ
       async function processVideo() {
         const frameRate = parseInt(frameRateInput.value) || 15;
         const interval = 1000 / frameRate;
@@ -168,87 +189,28 @@
         sendFrame();
       }
       
-      // ⑤ Three.js による 3D 表示（キャプチャした pose のランドマークを描画）
-      function renderCapturedPose(landmarks) {
-        if (!landmarks) {
-          alert("まだキャプチャできるデータがありません。");
+      // ⑥ 「記録」ボタン押下時：最新のランドマークの x, y, z 座標を下部に表示
+      recordButton.addEventListener('click', () => {
+        if (!latestLandmarks) {
+          landmarksOutput.innerText = "まだランドマークが検出されていません。";
           return;
         }
-        // threeContainer 内が既にあればクリアする
-        threeContainer.innerHTML = "";
-        
-        // シーン、カメラ、レンダラーの初期化
-        const scene = new THREE.Scene();
-        const width = threeContainer.clientWidth;
-        const height = threeContainer.clientHeight;
-        const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 1000);
-        camera.position.set(0, 0, 500);
-        const renderer = new THREE.WebGLRenderer({ antialias: true });
-        renderer.setSize(width, height);
-        threeContainer.appendChild(renderer.domElement);
-        
-        // OrbitControls で視点操作を可能にする
-        const controls = new THREE.OrbitControls(camera, renderer.domElement);
-        
-        // 座標変換：MediaPipe のランドマーク (x,y: 0～1, z:相対値) を 3D 空間へ
-        // ※ ここではシンプルに x, y をキャンバスサイズに、z は拡大係数を乗せます
-        const scaleXY = Math.min(outputCanvas.width, outputCanvas.height);
-        const scaleZ = scaleXY; // 適宜調整
-        const points = [];
-        landmarks.forEach(lm => {
-          // x,y を -0.5～+0.5 の範囲にし、スケールして配置。y 軸は反転させる。
-          const x = (lm.x - 0.5) * scaleXY;
-          const y = -(lm.y - 0.5) * scaleXY;
-          const z = lm.z * scaleZ;
-          points.push(new THREE.Vector3(x, y, z));
+        // ランドマークの一覧をテキストで整形して表示（各ランドマークに対して）
+        let outputText = "検出されたランドマーク (x, y, z):\n";
+        latestLandmarks.forEach((lm, index) => {
+          outputText += `【${index}】: x=${lm.x.toFixed(3)}, y=${lm.y.toFixed(3)}, z=${lm.z.toFixed(3)}\n`;
         });
-        
-        // 点群ジオメトリ作成
-        const geometry = new THREE.BufferGeometry().setFromPoints(points);
-        const material = new THREE.PointsMaterial({ color: 0xff0000, size: 8 });
-        const pointCloud = new THREE.Points(geometry, material);
-        scene.add(pointCloud);
-        
-        // スケルトン線（隣接するランドマークを線で結ぶ：MediaPipe が定義している関係を利用）
-        // ※ ここではシンプルに、MediaPipe Pose の CONNECTIONS（定数）を使用
-        if (Pose.POSE_CONNECTIONS) {
-          Pose.POSE_CONNECTIONS.forEach(connection => {
-            const idx1 = connection[0];
-            const idx2 = connection[1];
-            if (landmarks[idx1] && landmarks[idx2]) {
-              const geom = new THREE.BufferGeometry().setFromPoints([
-                points[idx1],
-                points[idx2]
-              ]);
-              const mat = new THREE.LineBasicMaterial({ color: 0x00ff00, linewidth: 2 });
-              const line = new THREE.Line(geom, mat);
-              scene.add(line);
-            }
-          });
-        }
-        
-        // 簡単なアニメーションループ
-        function animate() {
-          requestAnimationFrame(animate);
-          controls.update();
-          renderer.render(scene, camera);
-        }
-        animate();
-      }
+        landmarksOutput.innerText = outputText;
+      });
       
-      // ⑦ スタートボタン：カメラ起動、Pose 初期化、Pose 処理ループ開始
+      // ⑦ スタートボタン押下時の処理（既存のインターフェースは変更しない）
       startButton.addEventListener('click', async () => {
         await startCamera();
         initializePose();
         processVideo();
       });
       
-      // ⑧ キャプチャボタン：最新の 3D ランドマークを Three.js で描画
-      captureButton.addEventListener('click', () => {
-        renderCapturedPose(lastPoseLandmarks);
-      });
-      
-      // ページ読み込み時にカメラ列挙
+      // ページ読み込み時にカメラを列挙
       enumerateCameras();
     </script>
   </body>
