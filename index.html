@@ -55,7 +55,7 @@
       <div id="maxResolutionInfo"></div>
     </div>
     
-    <!-- カメラ映像（内部利用：Canvas に描画するため非表示） -->
+    <!-- カメラ映像（内部利用：Canvas に描画するので非表示） -->
     <video id="video" autoplay muted playsinline style="display:none;"></video>
     <!-- 描画用キャンバス -->
     <canvas id="outputCanvas"></canvas>
@@ -71,7 +71,7 @@
     <script src="https://cdn.jsdelivr.net/npm/three@0.150.0/build/three.min.js"></script>
     
     <script>
-      // ここでPOSE_CONNECTIONSを定義します
+      // ★グローバルに POSE_CONNECTIONS を定義（自前の接続情報）
       const POSE_CONNECTIONS = [
         [0, 1],
         [1, 2], [2, 3], [3, 7],
@@ -215,7 +215,7 @@
         processVideo();
       });
       
-      // ⑥ 「記録」ボタン押下時の処理：ループ停止、座標テーブルと3D描画を実行
+      // ⑥ 「記録」ボタン押下時の処理：ループ停止、座標テーブルと3D描画の実行
       captureButton.addEventListener('click', () => {
         clearTimeout(processingLoopId);
         if (latestResults && latestResults.poseLandmarks) {
@@ -238,7 +238,7 @@
         }
       });
       
-      // ⑦ Three.js を使って 3D 描画する関数
+      // ⑦ Three.js を用いて 3D 描画する関数
       function update3DPlot(landmarks) {
         while (threejsContainer.firstChild) {
           threejsContainer.removeChild(threejsContainer.firstChild);
@@ -272,7 +272,6 @@
         });
         scene.add(landmarkGroup);
         
-        // ランドマーク間の接続を、先ほど定義した POSE_CONNECTIONS を利用して描画
         const lineMaterial = new THREE.LineBasicMaterial({ color: 0x00ff00 });
         POSE_CONNECTIONS.forEach(pair => {
           const idx1 = pair[0], idx2 = pair[1];
