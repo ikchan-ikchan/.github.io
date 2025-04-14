@@ -80,7 +80,7 @@
       const maxResolutionInfo = document.getElementById('maxResolutionInfo');
       const threeContainer = document.getElementById('threeContainer');
       
-      // MediaPipe Pose インスタンスおよび最新の結果保存用
+      // MediaPipe Pose インスタンスおよび最新結果保存用
       let pose = null;
       let latestPoseResult = null;
       
@@ -132,7 +132,6 @@
         canvasCtx.save();
         // 拡大縮小・パンを反映するための変換設定
         canvasCtx.setTransform(canvasScale, 0, 0, canvasScale, canvasTranslateX, canvasTranslateY);
-        // クリア時は変換前の領域を考慮
         canvasCtx.clearRect(-canvasTranslateX/canvasScale, -canvasTranslateY/canvasScale, outputCanvas.width/canvasScale, outputCanvas.height/canvasScale);
         // 背景として入力画像（MediaPipe の結果画像）を描画
         canvasCtx.drawImage(results.image, 0, 0, outputCanvas.width, outputCanvas.height);
@@ -233,28 +232,27 @@
         }
       });
       
-      outputCanvas.addEventListener('mouseup', () => {
-        isDragging = false;
-      });
+      outputCanvas.addEventListener('mouseup', () => { isDragging = false; });
+      outputCanvas.addEventListener('mouseleave', () => { isDragging = false; });
       
-      outputCanvas.addEventListener('mouseleave', () => {
-        isDragging = false;
-      });
-      
-      // ⑥ キャプチャボタン押下時の処理
+      // ⑥ キャプチャボタン押下時の処理（デバッグ用ログ付き）
       captureButton.addEventListener('click', () => {
+        console.log("Capture button pressed.");
         if (latestPoseResult && latestPoseResult.poseLandmarks) {
+          console.log("Pose landmarks available, capturing now.");
           // キャプチャ時、2D キャンバス枠を一瞬赤くフラッシュ
           outputCanvas.style.border = "5px solid red";
           setTimeout(() => { outputCanvas.style.border = "1px solid #ccc"; }, 200);
           // まず 3D 表示領域に「処理中」と表示
           threeContainer.innerHTML = "<h3 style='text-align:center;margin-top:40%'>処理中</h3>";
-          // 500ms 遅延後に Three.js による 3D 描画を開始
+          console.log("Displayed '処理中'.");
+          // 500ms 遅延後に 3D 描画を開始（必要に応じて遅延時間を調整）
           setTimeout(() => {
+            console.log("Calling render3DPose.");
             render3DPose(latestPoseResult.poseLandmarks);
           }, 500);
         } else {
-          console.warn('まだ有効な pose 結果がありません。');
+          console.warn("No valid pose result available.");
         }
       });
       
@@ -276,13 +274,13 @@
         // OrbitControls で視点操作可能に
         const controls = new THREE.OrbitControls(camera, renderer.domElement);
         
-        // MediaPipe のランドマークは x,y ∈ [0,1] なので、ここではキャンバスサイズを基に中心を 0 に変換
+        // MediaPipe のランドマークは x,y ∈ [0,1] なので、キャンバスサイズを基に中心を 0 に変換
         // z は相対値なので適宜スケール（ここでは 500 倍）
         const geometry = new THREE.BufferGeometry();
         const points = [];
         landmarks.forEach(pt => {
           const x = (pt.x - 0.5) * width;
-          const y = -(pt.y - 0.5) * height;  // 上下反転
+          const y = -(pt.y - 0.5) * height;
           const z = pt.z * 500;
           points.push(x, y, z);
         });
