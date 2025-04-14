@@ -63,11 +63,10 @@
     <!-- MediaPipe Pose と Drawing Utils の読み込み（非モジュール版） -->
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
-    
-    <!-- Three.js はモジュールでなくグローバル変数 THREE として読み込む -->
+    <!-- Three.js はグローバル変数 THREE として読み込む -->
     <script src="https://cdn.jsdelivr.net/npm/three@0.149.0/build/three.min.js"></script>
     
-    <!-- メインのコードは type="module" で実装 -->
+    <!-- メインのコード：type="module" で実装 -->
     <script type="module">
       // モジュール版 OrbitControls をインポート
       import { OrbitControls } from "https://cdn.jsdelivr.net/npm/three@0.149.0/examples/jsm/controls/OrbitControls.js";
@@ -275,7 +274,7 @@
         renderer.setSize(width, height);
         threeContainer.appendChild(renderer.domElement);
         
-        // OrbitControls（モジュールからインポート済みの OrbitControls を使用）
+        // モジュール版 OrbitControls を使用
         const controls = new OrbitControls(camera, renderer.domElement);
         
         // MediaPipe のランドマークは x,y ∈ [0,1] なので、キャンバスサイズを基に中心を 0 に変換
