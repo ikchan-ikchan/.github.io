@@ -28,7 +28,7 @@
         border: 1px solid #aaa;
         padding: 4px;
       }
-      /* 3D描画用コンテナ（追加） */
+      /* 3D描画用コンテナ */
       #threejsContainer {
         width: 400px;
         height: 300px;
@@ -55,7 +55,7 @@
       <div id="maxResolutionInfo"></div>
     </div>
     
-    <!-- カメラ映像（内部利用：Canvas に描画するので非表示） -->
+    <!-- カメラ映像（内部利用：Canvas に描画するため非表示） -->
     <video id="video" autoplay muted playsinline style="display:none;"></video>
     <!-- 描画用キャンバス -->
     <canvas id="outputCanvas"></canvas>
@@ -67,10 +67,27 @@
     <!-- MediaPipe Pose と Drawing Utils の読み込み -->
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
-    <!-- Three.js の読み込み（3D描画用） -->
+    <!-- Three.js の読み込み -->
     <script src="https://cdn.jsdelivr.net/npm/three@0.150.0/build/three.min.js"></script>
     
     <script>
+      // ここでPOSE_CONNECTIONSを定義します
+      const POSE_CONNECTIONS = [
+        [0, 1],
+        [1, 2], [2, 3], [3, 7],
+        [0, 4],
+        [4, 5], [5, 6], [6, 8],
+        [9, 10],
+        [11, 12],
+        [11, 13], [13, 15], [15, 17], [15, 19], [15, 21],
+        [17, 19],
+        [12, 14], [14, 16], [16, 18], [16, 20], [16, 22],
+        [18, 20],
+        [11, 23], [12, 24],
+        [23, 24], [23, 25], [24, 26],
+        [25, 27], [26, 28]
+      ];
+      
       const video = document.getElementById('video');
       const outputCanvas = document.getElementById('outputCanvas');
       const canvasCtx = outputCanvas.getContext('2d');
@@ -85,7 +102,6 @@
       
       let pose = null;
       let processingLoopId = null;
-      // 最新の検出結果を保持する
       let latestResults = null;
       
       // ① 利用可能なカメラを列挙する
@@ -118,14 +134,14 @@
           minDetectionConfidence: 0.5,
           minTrackingConfidence: 0.5
         });
-        // onResults の中で描画および最新結果の保持を行う
+        // onResults で描画および最新結果の保存
         pose.onResults((results) => {
           latestResults = results;
           canvasCtx.save();
           canvasCtx.clearRect(0, 0, outputCanvas.width, outputCanvas.height);
           canvasCtx.drawImage(results.image, 0, 0, outputCanvas.width, outputCanvas.height);
           if (results.poseLandmarks) {
-            drawConnectors(canvasCtx, results.poseLandmarks, Pose.POSE_CONNECTIONS, { color: 'lime', lineWidth: 2 });
+            drawConnectors(canvasCtx, results.poseLandmarks, POSE_CONNECTIONS, { color: 'lime', lineWidth: 2 });
             drawLandmarks(canvasCtx, results.poseLandmarks, { color: 'red', lineWidth: 1 });
           }
           canvasCtx.restore();
@@ -135,7 +151,6 @@
       // ③ 選択したカメラで、最大解像度の何％かを指定して映像を取得する
       async function startCamera() {
         const selectedDeviceId = cameraSelect.value;
-        // まずはストリームを取得して capabilities をチェック
         const tempConstraints = { video: { deviceId: { exact: selectedDeviceId } } };
         let tempStream;
         try {
@@ -144,7 +159,6 @@
           console.error('初回ストリームの取得に失敗:', error);
           return;
         }
-        
         const videoTrack = tempStream.getVideoTracks()[0];
         const capabilities = videoTrack.getCapabilities();
         let maxWidth = (capabilities.width && capabilities.width.max) || 640;
@@ -157,7 +171,6 @@
         const desiredHeight = Math.floor(maxHeight * (resPercent / 100));
         const frameRate = parseInt(frameRateInput.value) || 15;
         
-        // 厳密な解像度指定のため "exact" を利用（サポートしていない場合はエラーになる可能性あり）
         const constraints = {
           video: {
             deviceId: { exact: selectedDeviceId },
@@ -171,7 +184,6 @@
           video.srcObject = stream;
           return new Promise(resolve => {
             video.onloadedmetadata = () => {
-              // 映像の実サイズに合わせて Canvas サイズを更新
               outputCanvas.width = video.videoWidth;
               outputCanvas.height = video.videoHeight;
               video.play();
@@ -203,11 +215,10 @@
         processVideo();
       });
       
-      // ⑥ 「記録」ボタン押下時の処理：ループ停止、テーブル＆3D描画を実行
+      // ⑥ 「記録」ボタン押下時の処理：ループ停止、座標テーブルと3D描画を実行
       captureButton.addEventListener('click', () => {
         clearTimeout(processingLoopId);
         if (latestResults && latestResults.poseLandmarks) {
-          // 座標テーブルの作成
           let html = '<h3>記録された座標 (x, y, z)</h3>';
           html += '<table>';
           html += '<tr><th>Index</th><th>x</th><th>y</th><th>z</th></tr>';
@@ -221,49 +232,39 @@
           });
           html += '</table>';
           poseCoordinatesDiv.innerHTML = html;
-          // 3D描画（Three.js を用いる）
           update3DPlot(latestResults.poseLandmarks);
         } else {
           poseCoordinatesDiv.innerHTML = '<p>まだポーズが検出されていません。</p>';
         }
       });
       
-      // ⑦ Three.js を使って 3D 図を更新する関数
+      // ⑦ Three.js を使って 3D 描画する関数
       function update3DPlot(landmarks) {
-        // three.js コンテナ内にすでにレンダラーがあれば削除
         while (threejsContainer.firstChild) {
           threejsContainer.removeChild(threejsContainer.firstChild);
         }
         
-        // シーン、カメラ、レンダラーの作成
         const scene = new THREE.Scene();
         scene.background = new THREE.Color(0xffffff);
-        const camera = new THREE.PerspectiveCamera(45, threejsContainer.clientWidth / threejsContainer.clientHeight, 0.1, 1000);
-        // カメラは適当に後方に配置
-        camera.position.set(0, 0, 5);
+        const camera3D = new THREE.PerspectiveCamera(45, threejsContainer.clientWidth / threejsContainer.clientHeight, 0.1, 1000);
+        camera3D.position.set(0, 0, 5);
         
         const renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(threejsContainer.clientWidth, threejsContainer.clientHeight);
         threejsContainer.appendChild(renderer.domElement);
         
-        // 軸ヘルパーを追加（任意）
         const axesHelper = new THREE.AxesHelper(1.5);
         scene.add(axesHelper);
         
-        // ランドマーク描画用グループ
         const landmarkGroup = new THREE.Group();
-        // スケール（表示用に拡大：任意に調整、ここでは 10 倍）
         const scaleFactor = 10;
-        
-        // 各ランドマークを球体で描画
         const sphereGeometry = new THREE.SphereGeometry(0.05, 16, 16);
         const sphereMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
         const points = [];
         landmarks.forEach(landmark => {
-          // MediaPipe の x,y は normalized 値 (0～1) なので、中心を(0,0) に合わせるために、-0.5～+0.5 に変換し、scaleFactor を掛ける
           const x = (landmark.x - 0.5) * scaleFactor;
-          const y = -(landmark.y - 0.5) * scaleFactor;  // 画面座標と3D座標系の違いを補正
-          const z = -landmark.z * scaleFactor; // z は相対値（符号は調整可能）
+          const y = -(landmark.y - 0.5) * scaleFactor;
+          const z = -landmark.z * scaleFactor;
           const sphere = new THREE.Mesh(sphereGeometry, sphereMaterial);
           sphere.position.set(x, y, z);
           landmarkGroup.add(sphere);
@@ -271,10 +272,9 @@
         });
         scene.add(landmarkGroup);
         
-        // ランドマーク間の接続（線）の描画
-        // Pose.POSE_CONNECTIONS は各接続のペア (index1, index2) の配列です
+        // ランドマーク間の接続を、先ほど定義した POSE_CONNECTIONS を利用して描画
         const lineMaterial = new THREE.LineBasicMaterial({ color: 0x00ff00 });
-        Pose.POSE_CONNECTIONS.forEach(pair => {
+        POSE_CONNECTIONS.forEach(pair => {
           const idx1 = pair[0], idx2 = pair[1];
           if (landmarks[idx1] && landmarks[idx2]) {
             const geometry = new THREE.BufferGeometry().setFromPoints([points[idx1], points[idx2]]);
@@ -283,11 +283,9 @@
           }
         });
         
-        // シンプルなレンダーループ（今回は一回のレンダリングで固定）
-        renderer.render(scene, camera);
+        renderer.render(scene, camera3D);
       }
       
-      // ページ読み込み時にカメラを列挙
       enumerateCameras();
     </script>
   </body>
