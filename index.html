@@ -60,14 +60,18 @@
     <!-- 3D 結果表示用領域 -->
     <div id="threeContainer"></div>
     
-    <!-- MediaPipe Pose と Drawing Utils の読み込み -->
+    <!-- MediaPipe Pose と Drawing Utils の読み込み（非モジュール版） -->
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
-    <!-- Three.js と OrbitControls の読み込み -->
-    <script src="https://cdn.jsdelivr.net/npm/three@0.149.0/build/three.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.149.0/examples/js/controls/OrbitControls.js"></script>
     
-    <script>
+    <!-- Three.js はモジュールでなくグローバル変数 THREE として読み込む -->
+    <script src="https://cdn.jsdelivr.net/npm/three@0.149.0/build/three.min.js"></script>
+    
+    <!-- メインのコードは type="module" で実装 -->
+    <script type="module">
+      // モジュール版 OrbitControls をインポート
+      import { OrbitControls } from "https://cdn.jsdelivr.net/npm/three@0.149.0/examples/jsm/controls/OrbitControls.js";
+    
       // 各 DOM 要素の取得
       const video = document.getElementById('video');
       const outputCanvas = document.getElementById('outputCanvas');
@@ -271,7 +275,7 @@
         renderer.setSize(width, height);
         threeContainer.appendChild(renderer.domElement);
         
-        // OrbitControls を使用（THREE.OrbitControls → OrbitControls に変更）
+        // OrbitControls（モジュールからインポート済みの OrbitControls を使用）
         const controls = new OrbitControls(camera, renderer.domElement);
         
         // MediaPipe のランドマークは x,y ∈ [0,1] なので、キャンバスサイズを基に中心を 0 に変換
