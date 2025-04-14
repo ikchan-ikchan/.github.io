@@ -8,15 +8,17 @@
         font-family: sans-serif;
         text-align: center;
       }
+      /* video は内部利用なので非表示 */
       video {
         display: none;
       }
+      /* 2D 出力用キャンバス */
       #outputCanvas {
         display: block;
         margin: 10px auto;
         border: 1px solid #ccc;
-        /* 初期は標準の境界線 */
       }
+      /* コントロール領域 */
       #controls {
         margin: 10px;
       }
@@ -25,7 +27,7 @@
         font-size: 0.9em;
         color: #555;
       }
-      /* 3D 表示領域用 */
+      /* 3D 表示領域 */
       #threeContainer {
         width: 640px;
         height: 480px;
@@ -52,11 +54,10 @@
       <div id="maxResolutionInfo"></div>
     </div>
     
-    <!-- カメラ映像（内部利用：表示はCanvas側に描画） -->
+    <!-- 映像は video で取得、結果は outputCanvas に描画 -->
     <video id="video" autoplay muted playsinline></video>
-    <!-- 2D 描画用キャンバス（MediaPipe Pose の結果表示用） -->
     <canvas id="outputCanvas"></canvas>
-    <!-- 3D 表示用領域（キャプチャしたランドマークを Three.js で描画） -->
+    <!-- 3D 結果表示用領域 -->
     <div id="threeContainer"></div>
     
     <!-- MediaPipe Pose と Drawing Utils の読み込み -->
@@ -67,7 +68,7 @@
     <script src="https://cdn.jsdelivr.net/npm/three@0.149.0/examples/js/controls/OrbitControls.js"></script>
     
     <script>
-      // 画面系の要素
+      // 各 DOM 要素の取得
       const video = document.getElementById('video');
       const outputCanvas = document.getElementById('outputCanvas');
       const canvasCtx = outputCanvas.getContext('2d');
@@ -79,11 +80,11 @@
       const maxResolutionInfo = document.getElementById('maxResolutionInfo');
       const threeContainer = document.getElementById('threeContainer');
       
-      // MediaPipe Pose インスタンスおよび最新結果
+      // MediaPipe Pose インスタンスおよび最新の結果保存用
       let pose = null;
       let latestPoseResult = null;
       
-      // --- 追加: 2D キャンバスで拡大／縮小／パンのためのグローバル変数 ---
+      // --- 2D キャンバスの拡大縮小／パン用変数 ---
       let canvasScale = 1;
       let canvasTranslateX = 0;
       let canvasTranslateY = 0;
@@ -111,7 +112,9 @@
       // ② MediaPipe Pose の初期化
       function initializePose() {
         pose = new Pose({
-          locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
+          locateFile: (file) => {
+            return `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`;
+          }
         });
         pose.setOptions({
           modelComplexity: 1,
@@ -124,13 +127,14 @@
       
       // ③ 結果を 2D キャンバスに描画するコールバック
       function onResults(results) {
-        latestPoseResult = results;  // 最新結果を保存
+        latestPoseResult = results;  // 最新の結果を保存
         
         canvasCtx.save();
-        // --- 追加: キャンバスの拡大／縮小とパンを反映 ---
+        // 拡大縮小・パンを反映するための変換設定
         canvasCtx.setTransform(canvasScale, 0, 0, canvasScale, canvasTranslateX, canvasTranslateY);
+        // クリア時は変換前の領域を考慮
         canvasCtx.clearRect(-canvasTranslateX/canvasScale, -canvasTranslateY/canvasScale, outputCanvas.width/canvasScale, outputCanvas.height/canvasScale);
-        // 背景に入力映像を描画
+        // 背景として入力画像（MediaPipe の結果画像）を描画
         canvasCtx.drawImage(results.image, 0, 0, outputCanvas.width, outputCanvas.height);
         if (results.poseLandmarks) {
           drawConnectors(canvasCtx, results.poseLandmarks, Pose.POSE_CONNECTIONS, { color: 'lime', lineWidth: 2 });
@@ -142,7 +146,7 @@
       // ④ 選択したカメラで、最大解像度の何％かを指定して映像を取得する
       async function startCamera() {
         const selectedDeviceId = cameraSelect.value;
-        // 一度制約なしで最大解像度を求める
+        // まずは制約なしでストリームを取得して capabilities を確認
         const tempConstraints = { video: { deviceId: { exact: selectedDeviceId } } };
         let tempStream;
         try {
@@ -162,7 +166,7 @@
         const desiredWidth = Math.floor(maxWidth * (resPercent / 100));
         const desiredHeight = Math.floor(maxHeight * (resPercent / 100));
         const frameRate = parseInt(frameRateInput.value) || 15;
-        // 厳密な解像度指定のため「exact」を使用（環境によっては「ideal」に変更）
+        // 厳密な解像度指定のため exact を使用（動作しない場合は ideal に変更）
         const constraints = {
           video: {
             deviceId: { exact: selectedDeviceId },
@@ -176,7 +180,7 @@
           video.srcObject = stream;
           return new Promise(resolve => {
             video.onloadedmetadata = () => {
-              // 実際の取得サイズに合わせてキャンバスサイズを更新
+              // 実際に取得した映像のサイズに合わせて 2D キャンバスも更新
               outputCanvas.width = video.videoWidth;
               outputCanvas.height = video.videoHeight;
               video.play();
@@ -201,10 +205,9 @@
         sendFrame();
       }
       
-      // --- 追加: 2Dキャンバスでの拡大／縮小とパン操作 ---
+      // --- 追加: 2D キャンバスで拡大縮小／パン操作 ---
       outputCanvas.addEventListener('wheel', (e) => {
         e.preventDefault();
-        // ホイールの上ならズームイン、下ならズームアウト
         const zoomFactor = 0.1;
         if (e.deltaY < 0) {
           canvasScale = Math.min(canvasScale + zoomFactor, 3);
@@ -241,14 +244,15 @@
       // ⑥ キャプチャボタン押下時の処理
       captureButton.addEventListener('click', () => {
         if (latestPoseResult && latestPoseResult.poseLandmarks) {
-          // キャプチャ時、2Dキャンバス枠を一瞬赤くフラッシュする
+          // キャプチャ時、2D キャンバス枠を一瞬赤くフラッシュ
           outputCanvas.style.border = "5px solid red";
           setTimeout(() => { outputCanvas.style.border = "1px solid #ccc"; }, 200);
-          
-          // 3D 表示領域に「処理中」と表示
-          threeContainer.innerHTML = "<h3>処理中</h3>";
-          // キャプチャした結果を Three.js で描画
-          render3DPose(latestPoseResult.poseLandmarks);
+          // まず 3D 表示領域に「処理中」と表示
+          threeContainer.innerHTML = "<h3 style='text-align:center;margin-top:40%'>処理中</h3>";
+          // 500ms 遅延後に Three.js による 3D 描画を開始
+          setTimeout(() => {
+            render3DPose(latestPoseResult.poseLandmarks);
+          }, 500);
         } else {
           console.warn('まだ有効な pose 結果がありません。');
         }
@@ -256,37 +260,38 @@
       
       // ⑦ Three.js を用いてキャプチャした 3D ランドマークを表示する関数
       function render3DPose(landmarks) {
-        // 既存の内容をクリア
+        // 既存の 3D 表示内容をクリア
         while (threeContainer.firstChild) {
           threeContainer.removeChild(threeContainer.firstChild);
         }
-        
         const width = threeContainer.clientWidth;
         const height = threeContainer.clientHeight;
         const scene = new THREE.Scene();
         const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 1000);
-        // カメラ位置はシーン全体が見渡せるよう調整
         camera.position.set(0, 0, 500);
         const renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(width, height);
         threeContainer.appendChild(renderer.domElement);
+        
+        // OrbitControls で視点操作可能に
         const controls = new THREE.OrbitControls(camera, renderer.domElement);
         
-        // MediaPipe のランドマークは x,y が [0,1]（画像内の位置）
-        // ここでは、キャンバスの幅・高さを元に中心を 0 にして変換、z は適宜スケール
+        // MediaPipe のランドマークは x,y ∈ [0,1] なので、ここではキャンバスサイズを基に中心を 0 に変換
+        // z は相対値なので適宜スケール（ここでは 500 倍）
         const geometry = new THREE.BufferGeometry();
         const points = [];
         landmarks.forEach(pt => {
           const x = (pt.x - 0.5) * width;
-          const y = -(pt.y - 0.5) * height;  // 上下反転して調整
-          const z = pt.z * 500; // スケールは必要に応じて調整
+          const y = -(pt.y - 0.5) * height;  // 上下反転
+          const z = pt.z * 500;
           points.push(x, y, z);
         });
         geometry.setAttribute('position', new THREE.Float32BufferAttribute(points, 3));
         const material = new THREE.PointsMaterial({ color: 0xff0000, size: 8 });
         const pointCloud = new THREE.Points(geometry, material);
         scene.add(pointCloud);
-        // 軸ヘルパーで座標軸表示（任意）
+        
+        // 任意：軸ヘルパーで座標軸を表示
         const axesHelper = new THREE.AxesHelper(200);
         scene.add(axesHelper);
         
@@ -300,7 +305,7 @@
       
       // ⑧ 開始ボタン押下時の処理（カメラ開始、Pose 初期化、映像送信開始）
       startButton.addEventListener('click', async () => {
-        // リセット：キャンバスの拡大／縮小・パンの状態を初期化
+        // リセット：拡大縮小／パン状態の初期化
         canvasScale = 1;
         canvasTranslateX = 0;
         canvasTranslateY = 0;
