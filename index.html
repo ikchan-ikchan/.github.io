@@ -2,7 +2,7 @@
 <html>
   <head>
     <meta charset="UTF-8">
-    <title>MediaPipe Pose: カメラ選択, FPS, 解像度指定 & 記録 + 3D表示（回転可能・面付き）デモ</title>
+    <title>MediaPipe Pose: カメラ選択, FPS, 解像度指定 & 記録 + 3D表示（回転・タッチ・地面描画）デモ</title>
     <style>
       body {
         font-family: sans-serif;
@@ -38,7 +38,7 @@
     </style>
   </head>
   <body>
-    <h2>MediaPipe Pose: カメラ選択, FPS, 解像度指定 & 記録 + 3D表示（回転可能・面付き）デモ</h2>
+    <h2>MediaPipe Pose: カメラ選択, FPS, 解像度指定 & 記録 + 3D表示（回転・タッチ・地面描画）デモ</h2>
     <div id="controls">
       <label for="cameraSelect">カメラ選択:</label>
       <select id="cameraSelect"></select>
@@ -226,7 +226,7 @@
         }
       });
       
-      // ⑦ Three.js を用いた 3D 表示関数（OrbitControls により回転・タッチ操作可能、各軸面を半透明で表示）
+      // ⑦ Three.js を用いた 3D 表示関数（OrbitControls により回転・タッチ操作可能、地面描画付き）
       function draw3DPoints(landmarks) {
         // 既存シーンのクリア
         threeContainer.innerHTML = '';
@@ -244,39 +244,19 @@
         controls.dampingFactor = 0.1;
         controls.screenSpacePanning = true;
         
-        // 環境光の追加
+        // 環境光を追加
         const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
         scene.add(ambientLight);
         
-        // 追加：各座標軸平面を半透明の面として描画
-        // X-Y 平面（z=0, 色: 赤、半透明）
-        const planeXY = new THREE.Mesh(
-          new THREE.PlaneGeometry(200, 200),
-          new THREE.MeshBasicMaterial({ color: 0xff0000, side: THREE.DoubleSide, opacity: 0.3, transparent: true })
-        );
-        // デフォルトの PlaneGeometry は XY 平面なのでそのままでOK
-        planeXY.position.z = 0;
-        scene.add(planeXY);
-        
-        // Y-Z 平面（x=0, 色: 緑、半透明）
-        const planeYZ = new THREE.Mesh(
-          new THREE.PlaneGeometry(200, 200),
-          new THREE.MeshBasicMaterial({ color: 0x00ff00, side: THREE.DoubleSide, opacity: 0.3, transparent: true })
-        );
-        // 回転して Y-Z 平面にする
-        planeYZ.rotation.y = Math.PI / 2;
-        planeYZ.position.x = 0;
-        scene.add(planeYZ);
-        
-        // X-Z 平面（y=0, 色: 青、半透明）
-        const planeXZ = new THREE.Mesh(
-          new THREE.PlaneGeometry(200, 200),
-          new THREE.MeshBasicMaterial({ color: 0x0000ff, side: THREE.DoubleSide, opacity: 0.3, transparent: true })
-        );
-        // 回転して X-Z 平面にする（ここでは -90度回転）
-        planeXZ.rotation.x = -Math.PI / 2;
-        planeXZ.position.y = 0;
-        scene.add(planeXZ);
+        // 地面を追加（大きな平面、下向きに配置・回転）
+        const planeSize = 300;
+        const planeGeometry = new THREE.PlaneGeometry(planeSize, planeSize);
+        const planeMaterial = new THREE.MeshBasicMaterial({ color: 0x888888, side: THREE.DoubleSide });
+        const plane = new THREE.Mesh(planeGeometry, planeMaterial);
+        plane.rotation.x = - Math.PI / 2; // 平面を水平に配置
+        // 例として、地面を Y 軸方向に下に配置
+        plane.position.y = -50;
+        scene.add(plane);
         
         // 各ランドマークを小さな球体として追加（存在する点のみ）
         const pointGeometry = new THREE.SphereGeometry(2, 16, 16);
@@ -292,10 +272,10 @@
           }
         });
         
-        // カメラ位置の設定（全体が見渡せる位置に配置）
+        // カメラ位置を設定（全体が見渡せる位置に）
         camera.position.set(0, 0, 150);
         
-        // アニメーションループ（OrbitControls によりマウス・タッチ操作で回転・ズーム可能）
+        // アニメーションループ（OrbitControls を更新）
         function animate() {
           requestAnimationFrame(animate);
           controls.update();
