@@ -2,7 +2,7 @@
 <html>
   <head>
     <meta charset="UTF-8">
-    <title>MediaPipe Pose: カメラ選択, FPS, 解像度指定 & 記録 + 3D表示（線・面付き・回転可能・タッチ対応）デモ</title>
+    <title>OpenCV Pose Estimation: カメラ選択, FPS, 解像度指定 & 記録 + 3D表示 デモ</title>
     <style>
       body {
         font-family: sans-serif;
@@ -38,7 +38,7 @@
     </style>
   </head>
   <body>
-    <h2>MediaPipe Pose: カメラ選択, FPS, 解像度指定 & 記録 + 3D表示（線・面付き・回転可能・タッチ対応）デモ</h2>
+    <h2>OpenCV Pose Estimation: カメラ選択, FPS, 解像度指定 & 記録 + 3D表示 デモ</h2>
     <div id="controls">
       <label for="cameraSelect">カメラ選択:</label>
       <select id="cameraSelect"></select>
@@ -65,17 +65,14 @@
     <!-- 3D 表示用コンテナ -->
     <div id="threeContainer"></div>
     
-    <!-- MediaPipe Pose と Drawing Utils の読み込み -->
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
-    <!-- Three.js の読み込み -->
+    <!-- OpenCV.js の読み込み (async 属性により onRuntimeInitialized で初期化) -->
+    <script async src="https://docs.opencv.org/4.x/opencv.js" type="text/javascript"></script>
+    <!-- Three.js と OrbitControls の読み込み -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-    <!-- OrbitControls (非モジュール版) の読み込み -->
     <script src="https://unpkg.com/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
-    <!-- ConvexGeometry の読み込み（面生成用） -->
-    <script src="https://unpkg.com/three@0.128.0/examples/js/geometries/ConvexGeometry.js"></script>
     
     <script>
+      // 要素の取得
       const video = document.getElementById('video');
       const outputCanvas = document.getElementById('outputCanvas');
       const canvasCtx = outputCanvas.getContext('2d');
@@ -87,12 +84,18 @@
       const maxResolutionInfo = document.getElementById('maxResolutionInfo');
       const poseCoordinatesDiv = document.getElementById('poseCoordinates');
       const threeContainer = document.getElementById('threeContainer');
-      
-      let pose = null;
-      let processingLoopId = null;
-      // 最新の検出結果を保持するグローバル変数
-      let latestResults = null;
-      
+
+      // OpenCV 関連の変数
+      let cap = null;
+      let src = null;
+      let net = null; // ポーズ推定用の DNN ネットワーク
+      let processing = false;
+      let landmarks = [];  // 最新のランドマーク配列
+
+      // ポーズ推定用のモデルファイル（ファイルはご自身のサーバに配置してください）
+      const protoFile = 'pose_deploy_linevec_faster_4_stages.prototxt';
+      const weightsFile = 'pose_iter_160000.caffemodel';
+
       // ① 利用可能なカメラの列挙
       async function enumerateCameras() {
         try {
@@ -110,34 +113,7 @@
         }
       }
       
-      // ② MediaPipe Pose の初期化
-      function initializePose() {
-        pose = new Pose({
-          locateFile: (file) => {
-            return `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`;
-          }
-        });
-        pose.setOptions({
-          modelComplexity: 1,
-          smoothLandmarks: true,
-          minDetectionConfidence: 0.5,
-          minTrackingConfidence: 0.5
-        });
-        // onResults 内で描画と最新結果の保存
-        pose.onResults((results) => {
-          latestResults = results;
-          canvasCtx.save();
-          canvasCtx.clearRect(0, 0, outputCanvas.width, outputCanvas.height);
-          canvasCtx.drawImage(results.image, 0, 0, outputCanvas.width, outputCanvas.height);
-          if (results.poseLandmarks) {
-            drawConnectors(canvasCtx, results.poseLandmarks, Pose.POSE_CONNECTIONS, { color: 'lime', lineWidth: 2 });
-            drawLandmarks(canvasCtx, results.poseLandmarks, { color: 'red', lineWidth: 1 });
-          }
-          canvasCtx.restore();
-        });
-      }
-      
-      // ③ 選択したカメラで、最大解像度の何％かを指定して映像を取得する
+      // ② 選択したカメラで、最大解像度の何％かを指定して映像を取得する
       async function startCamera() {
         const selectedDeviceId = cameraSelect.value;
         const tempConstraints = { video: { deviceId: { exact: selectedDeviceId } } };
@@ -184,73 +160,89 @@
         }
       }
       
-      // ④ 映像フレームを MediaPipe Pose に送信するループ
-      async function processVideo() {
-        const frameRate = parseInt(frameRateInput.value) || 15;
-        const interval = 1000 / frameRate;
-        async function sendFrame() {
-          if (!video.paused && !video.ended) {
-            await pose.send({ image: video });
+      // ③ DNN ネットワークの読み込み
+      function loadPoseNetwork() {
+        // ※ OpenCV.js の仮想ファイルシステムにファイルを配置する処理が必要な場合があります
+        // 下記はサーバ上の相対パスから直接ロードする例です
+        net = cv.readNetFromCaffe(protoFile, weightsFile);
+      }
+
+      // ④ OpenCV.js を用いたフレーム処理（DNN によるポーズ推定）
+      function processVideoFrame() {
+        if (!processing) return;
+        try {
+          cap.read(src);
+          // 入力画像を blob 化（前処理：正規化など必要に応じて調整）
+          let blob = cv.blobFromImage(src, 1.0 / 255, new cv.Size(src.cols, src.rows), new cv.Scalar(0,0,0), false, false);
+          net.setInput(blob);
+          let output = net.forward();
+          
+          // ※ 出力のサイズと形式は使用モデルに依存します。
+          // 以下は仮の実装例：出力サイズが [1, nPoints, H, W] と仮定し、
+          // 各キー点の最大信頼度位置を検出して正規化座標として保存する。
+          landmarks = [];
+          let nPoints = output.size[1];
+          let H = output.size[2];
+          let W = output.size[3];
+          for (let n = 0; n < nPoints; n++) {
+            let maxVal = 0;
+            let maxLoc = {x: 0, y: 0};
+            // 各信号（H×W）の中で最大値を探索
+            for (let i = 0; i < H; i++) {
+              for (let j = 0; j < W; j++) {
+                let index = n * H * W + i * W + j;
+                let prob = output.data32F[index];
+                if (prob > maxVal) {
+                  maxVal = prob;
+                  maxLoc = { x: j, y: i };
+                }
+              }
+            }
+            landmarks.push({
+              x: maxLoc.x / W,
+              y: maxLoc.y / H,
+              conf: maxVal
+            });
           }
-          processingLoopId = setTimeout(sendFrame, interval);
+          blob.delete();
+          output.delete();
+          
+          // 画像を canvas に描画（OpenCV.js の imshow を利用）
+          cv.imshow('outputCanvas', src);
+          // Canvas API でランドマークを重ね描き
+          canvasCtx.fillStyle = 'red';
+          landmarks.forEach(pt => {
+            if (pt.conf > 0.1) { // 信頼度の閾値（適宜調整）
+              canvasCtx.beginPath();
+              canvasCtx.arc(pt.x * src.cols, pt.y * src.rows, 4, 0, 2 * Math.PI);
+              canvasCtx.fill();
+            }
+          });
+        } catch (error) {
+          console.error(error);
         }
-        sendFrame();
+        // 指定フレームレートに基づくループ
+        const interval = 1000 / (parseInt(frameRateInput.value) || 15);
+        setTimeout(processVideoFrame, interval);
       }
       
-      // ⑤ 「開始」ボタン押下時の処理
-      startButton.addEventListener('click', async () => {
-        await startCamera();
-        initializePose();
-        processVideo();
-      });
-      
-      // ⑥ 「記録」ボタン押下時の処理：ループ停止、座標テーブルおよび 3D 表示を更新
-      captureButton.addEventListener('click', () => {
-        clearTimeout(processingLoopId);
-        if (latestResults && latestResults.poseLandmarks) {
-          let html = '<h3>記録された座標 (x, y, z)</h3>';
-          html += '<table>';
-          html += '<tr><th>Index</th><th>x</th><th>y</th><th>z</th></tr>';
-          latestResults.poseLandmarks.forEach((landmark, index) => {
-            html += `<tr>
-                        <td>${index}</td>
-                        <td>${landmark.x.toFixed(3)}</td>
-                        <td>${landmark.y.toFixed(3)}</td>
-                        <td>${landmark.z.toFixed(3)}</td>
-                     </tr>`;
-          });
-          html += '</table>';
-          poseCoordinatesDiv.innerHTML = html;
-          draw3DPoints(latestResults.poseLandmarks);
-        } else {
-          poseCoordinatesDiv.innerHTML = '<p>まだポーズが検出されていません。</p>';
-          threeContainer.innerHTML = '';
-        }
-      });
-      
-      // ⑦ Three.js を用いた 3D 表示関数（OrbitControls により回転・タッチ操作可能、灰色地面付き、線・面付き）
-      function draw3DPoints(landmarks) {
-        // 既存シーンのクリア
+      // ⑤ 3D 表示 (Three.js を利用) ※2D 正規化座標を X, Y としてプロット
+      function draw3DPoints() {
         threeContainer.innerHTML = '';
-        
-        // シーン、カメラ、レンダラーの作成
         const scene = new THREE.Scene();
-        const camera = new THREE.PerspectiveCamera(75, threeContainer.clientWidth / threeContainer.clientHeight, 0.1, 1000);
+        const camera3D = new THREE.PerspectiveCamera(75, threeContainer.clientWidth / threeContainer.clientHeight, 0.1, 1000);
         const renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(threeContainer.clientWidth, threeContainer.clientHeight);
         threeContainer.appendChild(renderer.domElement);
         
-        // OrbitControls の設定（タッチ操作にも対応、ダンピング有効）
-        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        const controls = new THREE.OrbitControls(camera3D, renderer.domElement);
         controls.enableDamping = true;
         controls.dampingFactor = 0.1;
         controls.screenSpacePanning = true;
         
-        // 環境光を追加
         const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
         scene.add(ambientLight);
         
-        // 灰色の地面（グラウンドプレーン）を追加
         const planeGeometry = new THREE.PlaneGeometry(400, 400);
         const planeMaterial = new THREE.MeshLambertMaterial({ color: 0x808080 });
         const plane = new THREE.Mesh(planeGeometry, planeMaterial);
@@ -258,81 +250,67 @@
         plane.position.y = -50;
         scene.add(plane);
         
-        // 各ランドマークを小さな球体として追加
+        // ランドマークを小さな球体として配置（ここでは Z 軸は 0 としています）
         const pointGeometry = new THREE.SphereGeometry(2, 16, 16);
         const pointMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
-        const landmarkPositions = [];  // すべての点の位置情報を保持
-        landmarks.forEach(landmark => {
-          if (landmark) {
+        landmarks.forEach(pt => {
+          if (pt.conf > 0.1) {
             const sphere = new THREE.Mesh(pointGeometry, pointMaterial);
-            const posX = (landmark.x - 0.5) * 100;
-            const posY = (0.5 - landmark.y) * 100;
-            const posZ = landmark.z * 100;
-            sphere.position.set(posX, posY, posZ);
+            sphere.position.x = (pt.x - 0.5) * 100;
+            sphere.position.y = (0.5 - pt.y) * 100;
+            sphere.position.z = 0;
             scene.add(sphere);
-            landmarkPositions.push(new THREE.Vector3(posX, posY, posZ));
           }
         });
         
-        // 線で体の構造を分かりやすく（Pose.POSE_CONNECTIONS を使用）
-        if (typeof Pose !== "undefined" && Pose.POSE_CONNECTIONS) {
-          const lineMaterial = new THREE.LineBasicMaterial({ color: 0x00ff00, linewidth: 2 });
-          const linePoints = [];
-          Pose.POSE_CONNECTIONS.forEach(pair => {
-            const i = pair[0];
-            const j = pair[1];
-            if (landmarks[i] && landmarks[j]) {
-              const p1 = new THREE.Vector3(
-                (landmarks[i].x - 0.5) * 100,
-                (0.5 - landmarks[i].y) * 100,
-                landmarks[i].z * 100
-              );
-              const p2 = new THREE.Vector3(
-                (landmarks[j].x - 0.5) * 100,
-                (0.5 - landmarks[j].y) * 100,
-                landmarks[j].z * 100
-              );
-              linePoints.push(p1, p2);
-            }
-          });
-          if (linePoints.length > 0) {
-            const lineGeometry = new THREE.BufferGeometry().setFromPoints(linePoints);
-            const lineSegments = new THREE.LineSegments(lineGeometry, lineMaterial);
-            scene.add(lineSegments);
-          }
-        }
-        
-        // 面（凸包）を追加（全ランドマークから）
-        if (landmarkPositions.length > 0) {
-          try {
-            const convexGeometry = new THREE.ConvexGeometry(landmarkPositions);
-            const convexMaterial = new THREE.MeshLambertMaterial({
-              color: 0x00ffff,
-              opacity: 0.3,
-              transparent: true,
-              side: THREE.DoubleSide
-            });
-            const convexMesh = new THREE.Mesh(convexGeometry, convexMaterial);
-            scene.add(convexMesh);
-          } catch (e) {
-            console.warn("ConvexGeometry の生成に失敗:", e);
-          }
-        }
-        
-        // カメラ位置を設定（全体が見渡せる位置に）
-        camera.position.set(0, 0, 150);
-        
-        // アニメーションループ（OrbitControls によりマウス・タッチ操作で回転、ズーム可能）
+        camera3D.position.set(0, 0, 150);
         function animate() {
           requestAnimationFrame(animate);
           controls.update();
-          renderer.render(scene, camera);
+          renderer.render(scene, camera3D);
         }
         animate();
       }
       
-      // ページ読み込み時にカメラを列挙
-      enumerateCameras();
+      // ⑥ 「記録」ボタン押下時：処理停止後にテーブルと 3D 表示を更新
+      captureButton.addEventListener('click', () => {
+        processing = false;
+        let html = '<h3>記録された座標 (正規化 x, y, 信頼度)</h3>';
+        html += '<table>';
+        html += '<tr><th>Index</th><th>x</th><th>y</th><th>conf</th></tr>';
+        landmarks.forEach((pt, index) => {
+          html += `<tr>
+                      <td>${index}</td>
+                      <td>${pt.x.toFixed(3)}</td>
+                      <td>${pt.y.toFixed(3)}</td>
+                      <td>${pt.conf.toFixed(3)}</td>
+                   </tr>`;
+        });
+        html += '</table>';
+        poseCoordinatesDiv.innerHTML = html;
+        draw3DPoints();
+      });
+      
+      // ⑦ 「開始」ボタン押下時の処理
+      startButton.addEventListener('click', async () => {
+        await startCamera();
+        cap = new cv.VideoCapture(video);
+        src = new cv.Mat(video.videoHeight, video.videoWidth, cv.CV_8UC4);
+        loadPoseNetwork();  // モデル読み込み（ファイルパスの設定に注意）
+        processing = true;
+        processVideoFrame();
+      });
+      
+      // OpenCV.js の初期化完了時のコールバック
+      function onOpenCvReady() {
+        console.log('OpenCV.js が初期化されました');
+        enumerateCameras();
+      }
+      if (cv.getBuildInformation) {
+        onOpenCvReady();
+      } else {
+        cv['onRuntimeInitialized'] = onOpenCvReady;
+      }
     </script>
   </body>
 </html>
