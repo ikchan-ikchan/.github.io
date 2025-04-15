@@ -2,7 +2,7 @@
 <html>
   <head>
     <meta charset="UTF-8">
-    <title>MediaPipe Pose: カメラ選択, FPS, 解像度指定 & 記録 + 3D表示（回転可能・タッチ対応、灰色地面＆骨格線付き）デモ</title>
+    <title>MediaPipe Pose: カメラ選択, FPS, 解像度指定 & 記録 + 3D表示（骨格線付き）デモ</title>
     <style>
       body {
         font-family: sans-serif;
@@ -38,7 +38,7 @@
     </style>
   </head>
   <body>
-    <h2>MediaPipe Pose: カメラ選択, FPS, 解像度指定 & 記録 + 3D表示（回転可能・タッチ対応、灰色地面＆骨格線付き）デモ</h2>
+    <h2>MediaPipe Pose: カメラ選択, FPS, 解像度指定 & 記録 + 3D表示（骨格線付き）デモ</h2>
     <div id="controls">
       <label for="cameraSelect">カメラ選択:</label>
       <select id="cameraSelect"></select>
@@ -57,7 +57,7 @@
     
     <!-- カメラ映像（内部利用：Canvas に描画） -->
     <video id="video" autoplay muted playsinline style="display:none;"></video>
-    <!-- 描画用キャンバス（2D 表示） -->
+    <!-- 2D 描画用キャンバス -->
     <canvas id="outputCanvas"></canvas>
     
     <!-- Pose 座標表示用 -->
@@ -74,24 +74,7 @@
     <script src="https://unpkg.com/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
     
     <script>
-      const video = document.getElementById('video');
-      const outputCanvas = document.getElementById('outputCanvas');
-      const canvasCtx = outputCanvas.getContext('2d');
-      const cameraSelect = document.getElementById('cameraSelect');
-      const frameRateInput = document.getElementById('frameRateInput');
-      const resPercentInput = document.getElementById('resPercentInput');
-      const startButton = document.getElementById('startButton');
-      const captureButton = document.getElementById('captureButton');
-      const maxResolutionInfo = document.getElementById('maxResolutionInfo');
-      const poseCoordinatesDiv = document.getElementById('poseCoordinates');
-      const threeContainer = document.getElementById('threeContainer');
-      
-      let pose = null;
-      let processingLoopId = null;
-      // 最新の検出結果を保持するグローバル変数
-      let latestResults = null;
-      
-      // 接続の定義（MediaPipe Pose の主要な接続例）
+      // メディアパイプ Pose で使う接続配列（主要な骨格接続例）
       const POSE_CONNECTIONS = [
         [11, 13],
         [13, 15],
@@ -110,6 +93,22 @@
         [28, 30],
         [30, 32]
       ];
+      
+      const video = document.getElementById('video');
+      const outputCanvas = document.getElementById('outputCanvas');
+      const canvasCtx = outputCanvas.getContext('2d');
+      const cameraSelect = document.getElementById('cameraSelect');
+      const frameRateInput = document.getElementById('frameRateInput');
+      const resPercentInput = document.getElementById('resPercentInput');
+      const startButton = document.getElementById('startButton');
+      const captureButton = document.getElementById('captureButton');
+      const maxResolutionInfo = document.getElementById('maxResolutionInfo');
+      const poseCoordinatesDiv = document.getElementById('poseCoordinates');
+      const threeContainer = document.getElementById('threeContainer');
+      
+      let pose = null;
+      let processingLoopId = null;
+      let latestResults = null;  // 最新のポーズ検出結果を保持
       
       // ① 利用可能なカメラの列挙
       async function enumerateCameras() {
@@ -141,13 +140,13 @@
           minDetectionConfidence: 0.5,
           minTrackingConfidence: 0.5
         });
-        // onResults 内で描画と最新結果の保存
         pose.onResults((results) => {
           latestResults = results;
           canvasCtx.save();
           canvasCtx.clearRect(0, 0, outputCanvas.width, outputCanvas.height);
           canvasCtx.drawImage(results.image, 0, 0, outputCanvas.width, outputCanvas.height);
           if (results.poseLandmarks) {
+            // 2D 描画は MediaPipe が提供する接続で描画
             drawConnectors(canvasCtx, results.poseLandmarks, Pose.POSE_CONNECTIONS, { color: 'lime', lineWidth: 2 });
             drawLandmarks(canvasCtx, results.poseLandmarks, { color: 'red', lineWidth: 1 });
           }
@@ -155,7 +154,7 @@
         });
       }
       
-      // ③ 選択したカメラで、最大解像度の何％かを指定して映像を取得する
+      // ③ 選択カメラで、最大解像度の何％かを指定して映像を取得
       async function startCamera() {
         const selectedDeviceId = cameraSelect.value;
         const tempConstraints = { video: { deviceId: { exact: selectedDeviceId } } };
@@ -222,7 +221,7 @@
         processVideo();
       });
       
-      // ⑥ 「記録」ボタン押下時の処理：ループ停止、座標テーブルおよび 3D 表示を更新
+      // ⑥ 「記録」ボタン押下時の処理：処理ループ停止、座標テーブル＆3D 表示更新
       captureButton.addEventListener('click', () => {
         clearTimeout(processingLoopId);
         if (latestResults && latestResults.poseLandmarks) {
@@ -246,9 +245,9 @@
         }
       });
       
-      // ⑦ Three.js を用いた 3D 表示関数（OrbitControls により回転・タッチ操作可能、灰色地面＋骨格接続線付き）
+      // ⑦ Three.js を用いた 3D 表示関数（OrbitControls で回転・タッチ操作可能、灰色地面＆青色骨格線付き）
       function draw3DPoints(landmarks) {
-        // 既存シーンのクリア
+        // 既存シーンがある場合はクリア
         threeContainer.innerHTML = '';
         
         // シーン、カメラ、レンダラーの作成
@@ -258,7 +257,7 @@
         renderer.setSize(threeContainer.clientWidth, threeContainer.clientHeight);
         threeContainer.appendChild(renderer.domElement);
         
-        // OrbitControls の設定（回転・ズーム、ダンピング有効、タッチ対応）
+        // OrbitControls の設定（回転・ズーム、ダンピング有効、タッチ操作対応）
         const controls = new THREE.OrbitControls(camera, renderer.domElement);
         controls.enableDamping = true;
         controls.dampingFactor = 0.1;
@@ -272,18 +271,17 @@
         const planeGeometry = new THREE.PlaneGeometry(400, 400);
         const planeMaterial = new THREE.MeshLambertMaterial({ color: 0x808080 });
         const plane = new THREE.Mesh(planeGeometry, planeMaterial);
-        plane.rotation.x = -Math.PI / 2;  // 地面を水平に配置
-        plane.position.y = -50;           // シーン下部に配置（調整可能）
+        plane.rotation.x = -Math.PI / 2;
+        plane.position.y = -50;
         scene.add(plane);
         
-        // 各ランドマークを小さな球体として追加
+        // 各ランドマークを球体として追加およびその座標を配列に格納
         const pointGeometry = new THREE.SphereGeometry(2, 16, 16);
         const pointMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
-        const points = [];  // 各点の位置情報を保存
+        const points = [];
         landmarks.forEach(landmark => {
           if (landmark) {
             const sphere = new THREE.Mesh(pointGeometry, pointMaterial);
-            // MediaPipe の normalized 座標 → 変換後の値 (x,y: (0～1) を -50～50 の範囲に、z:相対値を100倍)
             const x = (landmark.x - 0.5) * 100;
             const y = (0.5 - landmark.y) * 100;
             const z = landmark.z * 100;
@@ -295,8 +293,10 @@
           }
         });
         
+        console.log("3D点の座標:", points); // デバッグ用
+        
         // 骨格を青色の線で接続する
-        const lineMaterial = new THREE.LineBasicMaterial({ color: 0x0000ff });
+        const lineMaterial = new THREE.LineBasicMaterial({ color: 0x0000ff, linewidth: 2 });
         POSE_CONNECTIONS.forEach(pair => {
           const start = points[pair[0]];
           const end = points[pair[1]];
@@ -312,7 +312,7 @@
           }
         });
         
-        // カメラ位置を設定（全体が見渡せるように）
+        // カメラ位置を設定（全体が見やすい位置へ）
         camera.position.set(0, 0, 150);
         
         // アニメーションループ（OrbitControls 更新）
