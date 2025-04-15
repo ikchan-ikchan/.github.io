@@ -70,8 +70,8 @@
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
     <!-- Three.js の読み込み -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-    <!-- OrbitControls の読み込み（タッチ操作も対応） -->
-    <script src="https://threejs.org/examples/js/controls/OrbitControls.js"></script>
+    <!-- OrbitControls (非モジュール版) の読み込み -->
+    <script src="https://unpkg.com/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
     
     <script>
       const video = document.getElementById('video');
@@ -219,7 +219,6 @@
           });
           html += '</table>';
           poseCoordinatesDiv.innerHTML = html;
-          // 3D 描画（点が取得できた場合のみ）
           draw3DPoints(latestResults.poseLandmarks);
         } else {
           poseCoordinatesDiv.innerHTML = '<p>まだポーズが検出されていません。</p>';
@@ -227,7 +226,7 @@
         }
       });
       
-      // ⑦ Three.js を用いた 3D 表示関数（OrbitControls でタッチやマウスによる回転・ズーム対応）
+      // ⑦ Three.js を用いた 3D 表示関数（OrbitControls により回転・タッチ操作可能）
       function draw3DPoints(landmarks) {
         // 既存シーンのクリア
         threeContainer.innerHTML = '';
@@ -239,9 +238,9 @@
         renderer.setSize(threeContainer.clientWidth, threeContainer.clientHeight);
         threeContainer.appendChild(renderer.domElement);
         
-        // OrbitControls の設定（デフォルトでタッチ操作にも対応）
+        // OrbitControls の設定（タッチ操作にも対応、ダンピング有効）
         const controls = new THREE.OrbitControls(camera, renderer.domElement);
-        controls.enableDamping = true;       // 慣性回転有効
+        controls.enableDamping = true;
         controls.dampingFactor = 0.1;
         controls.screenSpacePanning = true;
         
@@ -249,13 +248,13 @@
         const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
         scene.add(ambientLight);
         
-        // 各ランドマークを小さな球体として追加
+        // 各ランドマークを小さな球体として追加（存在する点のみ）
         const pointGeometry = new THREE.SphereGeometry(2, 16, 16);
         const pointMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
         landmarks.forEach(landmark => {
           if (landmark) {
             const sphere = new THREE.Mesh(pointGeometry, pointMaterial);
-            // MediaPipe の normalized 座標を変換
+            // MediaPipe の normalized 座標: x,y (0～1), z (相対値)
             sphere.position.x = (landmark.x - 0.5) * 100;
             sphere.position.y = (0.5 - landmark.y) * 100;
             sphere.position.z = landmark.z * 100;
@@ -263,10 +262,10 @@
           }
         });
         
-        // カメラ位置の設定（全体が見渡せる位置に配置）
+        // カメラ位置を設定（全体が見渡せる位置に）
         camera.position.set(0, 0, 150);
         
-        // アニメーションループ（OrbitControls によりマウス・タッチ操作で回転、ズーム可能）
+        // アニメーションループ（OrbitControls を更新）
         function animate() {
           requestAnimationFrame(animate);
           controls.update();
