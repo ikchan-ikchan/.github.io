@@ -2,7 +2,7 @@
 <html>
   <head>
     <meta charset="UTF-8">
-    <title>MediaPipe Pose: カメラ選択, FPS, 解像度指定 & 記録 + 3D表示（骨格線付き）デモ</title>
+    <title>MediaPipe Pose: カメラ選択, FPS, 解像度指定 & 記録 + 3D表示（線・面付き・回転可能・タッチ対応）デモ</title>
     <style>
       body {
         font-family: sans-serif;
@@ -38,7 +38,7 @@
     </style>
   </head>
   <body>
-    <h2>MediaPipe Pose: カメラ選択, FPS, 解像度指定 & 記録 + 3D表示（骨格線付き）デモ</h2>
+    <h2>MediaPipe Pose: カメラ選択, FPS, 解像度指定 & 記録 + 3D表示（線・面付き・回転可能・タッチ対応）デモ</h2>
     <div id="controls">
       <label for="cameraSelect">カメラ選択:</label>
       <select id="cameraSelect"></select>
@@ -57,7 +57,7 @@
     
     <!-- カメラ映像（内部利用：Canvas に描画） -->
     <video id="video" autoplay muted playsinline style="display:none;"></video>
-    <!-- 2D 描画用キャンバス -->
+    <!-- 描画用キャンバス（2D 表示） -->
     <canvas id="outputCanvas"></canvas>
     
     <!-- Pose 座標表示用 -->
@@ -72,28 +72,10 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <!-- OrbitControls (非モジュール版) の読み込み -->
     <script src="https://unpkg.com/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <!-- ConvexGeometry の読み込み（面生成用） -->
+    <script src="https://unpkg.com/three@0.128.0/examples/js/geometries/ConvexGeometry.js"></script>
     
     <script>
-      // メディアパイプ Pose で使う接続配列（主要な骨格接続例）
-      const POSE_CONNECTIONS = [
-        [11, 13],
-        [13, 15],
-        [12, 14],
-        [14, 16],
-        [11, 12],
-        [11, 23],
-        [12, 24],
-        [23, 24],
-        [23, 25],
-        [25, 27],
-        [27, 29],
-        [29, 31],
-        [24, 26],
-        [26, 28],
-        [28, 30],
-        [30, 32]
-      ];
-      
       const video = document.getElementById('video');
       const outputCanvas = document.getElementById('outputCanvas');
       const canvasCtx = outputCanvas.getContext('2d');
@@ -108,7 +90,8 @@
       
       let pose = null;
       let processingLoopId = null;
-      let latestResults = null;  // 最新のポーズ検出結果を保持
+      // 最新の検出結果を保持するグローバル変数
+      let latestResults = null;
       
       // ① 利用可能なカメラの列挙
       async function enumerateCameras() {
@@ -140,13 +123,13 @@
           minDetectionConfidence: 0.5,
           minTrackingConfidence: 0.5
         });
+        // onResults 内で描画と最新結果の保存
         pose.onResults((results) => {
           latestResults = results;
           canvasCtx.save();
           canvasCtx.clearRect(0, 0, outputCanvas.width, outputCanvas.height);
           canvasCtx.drawImage(results.image, 0, 0, outputCanvas.width, outputCanvas.height);
           if (results.poseLandmarks) {
-            // 2D 描画は MediaPipe が提供する接続で描画
             drawConnectors(canvasCtx, results.poseLandmarks, Pose.POSE_CONNECTIONS, { color: 'lime', lineWidth: 2 });
             drawLandmarks(canvasCtx, results.poseLandmarks, { color: 'red', lineWidth: 1 });
           }
@@ -154,7 +137,7 @@
         });
       }
       
-      // ③ 選択カメラで、最大解像度の何％かを指定して映像を取得
+      // ③ 選択したカメラで、最大解像度の何％かを指定して映像を取得する
       async function startCamera() {
         const selectedDeviceId = cameraSelect.value;
         const tempConstraints = { video: { deviceId: { exact: selectedDeviceId } } };
@@ -221,7 +204,7 @@
         processVideo();
       });
       
-      // ⑥ 「記録」ボタン押下時の処理：処理ループ停止、座標テーブル＆3D 表示更新
+      // ⑥ 「記録」ボタン押下時の処理：ループ停止、座標テーブルおよび 3D 表示を更新
       captureButton.addEventListener('click', () => {
         clearTimeout(processingLoopId);
         if (latestResults && latestResults.poseLandmarks) {
@@ -245,9 +228,9 @@
         }
       });
       
-      // ⑦ Three.js を用いた 3D 表示関数（OrbitControls で回転・タッチ操作可能、灰色地面＆青色骨格線付き）
+      // ⑦ Three.js を用いた 3D 表示関数（OrbitControls により回転・タッチ操作可能、灰色地面付き、線・面付き）
       function draw3DPoints(landmarks) {
-        // 既存シーンがある場合はクリア
+        // 既存シーンのクリア
         threeContainer.innerHTML = '';
         
         // シーン、カメラ、レンダラーの作成
@@ -257,17 +240,17 @@
         renderer.setSize(threeContainer.clientWidth, threeContainer.clientHeight);
         threeContainer.appendChild(renderer.domElement);
         
-        // OrbitControls の設定（回転・ズーム、ダンピング有効、タッチ操作対応）
+        // OrbitControls の設定（タッチ操作にも対応、ダンピング有効）
         const controls = new THREE.OrbitControls(camera, renderer.domElement);
         controls.enableDamping = true;
         controls.dampingFactor = 0.1;
         controls.screenSpacePanning = true;
         
-        // 環境光の追加
+        // 環境光を追加
         const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
         scene.add(ambientLight);
         
-        // 灰色の地面（グラウンドプレーン）の追加
+        // 灰色の地面（グラウンドプレーン）を追加
         const planeGeometry = new THREE.PlaneGeometry(400, 400);
         const planeMaterial = new THREE.MeshLambertMaterial({ color: 0x808080 });
         const plane = new THREE.Mesh(planeGeometry, planeMaterial);
@@ -275,47 +258,71 @@
         plane.position.y = -50;
         scene.add(plane);
         
-        // 各ランドマークを球体として追加およびその座標を配列に格納
+        // 各ランドマークを小さな球体として追加
         const pointGeometry = new THREE.SphereGeometry(2, 16, 16);
         const pointMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
-        const points = [];
+        const landmarkPositions = [];  // すべての点の位置情報を保持
         landmarks.forEach(landmark => {
           if (landmark) {
             const sphere = new THREE.Mesh(pointGeometry, pointMaterial);
-            const x = (landmark.x - 0.5) * 100;
-            const y = (0.5 - landmark.y) * 100;
-            const z = landmark.z * 100;
-            sphere.position.set(x, y, z);
+            const posX = (landmark.x - 0.5) * 100;
+            const posY = (0.5 - landmark.y) * 100;
+            const posZ = landmark.z * 100;
+            sphere.position.set(posX, posY, posZ);
             scene.add(sphere);
-            points.push({ x, y, z });
-          } else {
-            points.push(null);
+            landmarkPositions.push(new THREE.Vector3(posX, posY, posZ));
           }
         });
         
-        console.log("3D点の座標:", points); // デバッグ用
-        
-        // 骨格を青色の線で接続する
-        const lineMaterial = new THREE.LineBasicMaterial({ color: 0x0000ff, linewidth: 2 });
-        POSE_CONNECTIONS.forEach(pair => {
-          const start = points[pair[0]];
-          const end = points[pair[1]];
-          if (start && end) {
-            const geometry = new THREE.BufferGeometry();
-            const vertices = new Float32Array([
-              start.x, start.y, start.z,
-              end.x, end.y, end.z
-            ]);
-            geometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
-            const line = new THREE.Line(geometry, lineMaterial);
-            scene.add(line);
+        // 線で体の構造を分かりやすく（Pose.POSE_CONNECTIONS を使用）
+        if (typeof Pose !== "undefined" && Pose.POSE_CONNECTIONS) {
+          const lineMaterial = new THREE.LineBasicMaterial({ color: 0x00ff00, linewidth: 2 });
+          const linePoints = [];
+          Pose.POSE_CONNECTIONS.forEach(pair => {
+            const i = pair[0];
+            const j = pair[1];
+            if (landmarks[i] && landmarks[j]) {
+              const p1 = new THREE.Vector3(
+                (landmarks[i].x - 0.5) * 100,
+                (0.5 - landmarks[i].y) * 100,
+                landmarks[i].z * 100
+              );
+              const p2 = new THREE.Vector3(
+                (landmarks[j].x - 0.5) * 100,
+                (0.5 - landmarks[j].y) * 100,
+                landmarks[j].z * 100
+              );
+              linePoints.push(p1, p2);
+            }
+          });
+          if (linePoints.length > 0) {
+            const lineGeometry = new THREE.BufferGeometry().setFromPoints(linePoints);
+            const lineSegments = new THREE.LineSegments(lineGeometry, lineMaterial);
+            scene.add(lineSegments);
           }
-        });
+        }
         
-        // カメラ位置を設定（全体が見やすい位置へ）
+        // 面（凸包）を追加（全ランドマークから）
+        if (landmarkPositions.length > 0) {
+          try {
+            const convexGeometry = new THREE.ConvexGeometry(landmarkPositions);
+            const convexMaterial = new THREE.MeshLambertMaterial({
+              color: 0x00ffff,
+              opacity: 0.3,
+              transparent: true,
+              side: THREE.DoubleSide
+            });
+            const convexMesh = new THREE.Mesh(convexGeometry, convexMaterial);
+            scene.add(convexMesh);
+          } catch (e) {
+            console.warn("ConvexGeometry の生成に失敗:", e);
+          }
+        }
+        
+        // カメラ位置を設定（全体が見渡せる位置に）
         camera.position.set(0, 0, 150);
         
-        // アニメーションループ（OrbitControls 更新）
+        // アニメーションループ（OrbitControls によりマウス・タッチ操作で回転、ズーム可能）
         function animate() {
           requestAnimationFrame(animate);
           controls.update();
