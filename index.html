@@ -2,7 +2,7 @@
 <html>
   <head>
     <meta charset="UTF-8">
-    <title>MediaPipe Pose: カメラ選択, FPS, 解像度指定 & 記録 + 3D表示（回転・タッチ・地面描画）デモ</title>
+    <title>MediaPipe Pose: カメラ選択, FPS, 解像度指定 & 記録 + 3D表示（回転可能・タッチ対応、灰色地面付き）デモ</title>
     <style>
       body {
         font-family: sans-serif;
@@ -38,7 +38,7 @@
     </style>
   </head>
   <body>
-    <h2>MediaPipe Pose: カメラ選択, FPS, 解像度指定 & 記録 + 3D表示（回転・タッチ・地面描画）デモ</h2>
+    <h2>MediaPipe Pose: カメラ選択, FPS, 解像度指定 & 記録 + 3D表示（回転可能・タッチ対応、灰色地面付き）デモ</h2>
     <div id="controls">
       <label for="cameraSelect">カメラ選択:</label>
       <select id="cameraSelect"></select>
@@ -226,7 +226,7 @@
         }
       });
       
-      // ⑦ Three.js を用いた 3D 表示関数（OrbitControls により回転・タッチ操作可能、地面描画付き）
+      // ⑦ Three.js を用いた 3D 表示関数（OrbitControls により回転・タッチ操作可能、灰色の地面付き）
       function draw3DPoints(landmarks) {
         // 既存シーンのクリア
         threeContainer.innerHTML = '';
@@ -248,13 +248,12 @@
         const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
         scene.add(ambientLight);
         
-        // 地面を追加（大きな平面、下向きに配置・回転）
-        const planeSize = 300;
-        const planeGeometry = new THREE.PlaneGeometry(planeSize, planeSize);
-        const planeMaterial = new THREE.MeshBasicMaterial({ color: 0x888888, side: THREE.DoubleSide });
+        // 灰色の地面（グラウンドプレーン）を追加
+        const planeGeometry = new THREE.PlaneGeometry(400, 400);
+        const planeMaterial = new THREE.MeshLambertMaterial({ color: 0x808080 });
         const plane = new THREE.Mesh(planeGeometry, planeMaterial);
-        plane.rotation.x = - Math.PI / 2; // 平面を水平に配置
-        // 例として、地面を Y 軸方向に下に配置
+        plane.rotation.x = -Math.PI / 2;  // 水平に配置
+        // 地面の位置はシーンの中心より下に配置（値はシーンのスケールに応じて調整）
         plane.position.y = -50;
         scene.add(plane);
         
@@ -275,7 +274,7 @@
         // カメラ位置を設定（全体が見渡せる位置に）
         camera.position.set(0, 0, 150);
         
-        // アニメーションループ（OrbitControls を更新）
+        // アニメーションループ（OrbitControls によりマウス・タッチ操作で回転、ズーム可能）
         function animate() {
           requestAnimationFrame(animate);
           controls.update();
