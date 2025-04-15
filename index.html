@@ -2,7 +2,7 @@
 <html>
   <head>
     <meta charset="UTF-8">
-    <title>MediaPipe Pose: カメラ選択, FPS, 解像度指定 & 記録 + 3D表示（回転可能・タッチ対応、灰色地面付き）デモ</title>
+    <title>MediaPipe Pose: カメラ選択, FPS, 解像度指定 & 記録 + 3D表示（骨格線付き、回転可能・タッチ対応、灰色地面付き）デモ</title>
     <style>
       body {
         font-family: sans-serif;
@@ -38,7 +38,7 @@
     </style>
   </head>
   <body>
-    <h2>MediaPipe Pose: カメラ選択, FPS, 解像度指定 & 記録 + 3D表示（回転可能・タッチ対応、灰色地面付き）デモ</h2>
+    <h2>MediaPipe Pose: カメラ選択, FPS, 解像度指定 & 記録 + 3D表示（骨格線付き、回転可能・タッチ対応、灰色地面付き）デモ</h2>
     <div id="controls">
       <label for="cameraSelect">カメラ選択:</label>
       <select id="cameraSelect"></select>
@@ -111,9 +111,7 @@
       // ② MediaPipe Pose の初期化
       function initializePose() {
         pose = new Pose({
-          locateFile: (file) => {
-            return `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`;
-          }
+          locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
         });
         pose.setOptions({
           modelComplexity: 1,
@@ -226,7 +224,7 @@
         }
       });
       
-      // ⑦ Three.js を用いた 3D 表示関数（OrbitControls により回転・タッチ操作可能、灰色の地面付き）
+      // ⑦ Three.js を用いた 3D 表示関数（OrbitControls により回転・タッチ操作可能、灰色の地面付き、骨格線付き）
       function draw3DPoints(landmarks) {
         // 既存シーンのクリア
         threeContainer.innerHTML = '';
@@ -252,24 +250,48 @@
         const planeGeometry = new THREE.PlaneGeometry(400, 400);
         const planeMaterial = new THREE.MeshLambertMaterial({ color: 0x808080 });
         const plane = new THREE.Mesh(planeGeometry, planeMaterial);
-        plane.rotation.x = -Math.PI / 2;  // 水平に配置
-        // 地面の位置はシーンの中心より下に配置（値はシーンのスケールに応じて調整）
+        plane.rotation.x = -Math.PI / 2;
         plane.position.y = -50;
         scene.add(plane);
         
         // 各ランドマークを小さな球体として追加（存在する点のみ）
         const pointGeometry = new THREE.SphereGeometry(2, 16, 16);
         const pointMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+        // 配列に各点の座標（Vector3）を保存しておく（骨格線描画用）
+        const pointPositions = [];
         landmarks.forEach(landmark => {
           if (landmark) {
             const sphere = new THREE.Mesh(pointGeometry, pointMaterial);
-            // MediaPipe の normalized 座標: x,y (0～1), z (相対値)
-            sphere.position.x = (landmark.x - 0.5) * 100;
-            sphere.position.y = (0.5 - landmark.y) * 100;
-            sphere.position.z = landmark.z * 100;
+            const x = (landmark.x - 0.5) * 100;
+            const y = (0.5 - landmark.y) * 100;
+            const z = landmark.z * 100;
+            sphere.position.set(x, y, z);
+            pointPositions.push(new THREE.Vector3(x, y, z));
             scene.add(sphere);
+          } else {
+            // 点が取得できなかった場合は null を追加
+            pointPositions.push(null);
           }
         });
+        
+        // 骨格線を描画するための接続情報を利用
+        // MediaPipe Pose の 2D 表示で利用される接続情報が Pose.POSE_CONNECTIONS として定義されています
+        if (typeof Pose !== 'undefined' && Pose.POSE_CONNECTIONS) {
+          const connections = Pose.POSE_CONNECTIONS;
+          const lineMaterial = new THREE.LineBasicMaterial({ color: 0x00ff00 });
+          // connections は配列（もしくは Set）で、各要素が [startIndex, endIndex] のペアになっています
+          connections.forEach(pair => {
+            const idx0 = pair[0];
+            const idx1 = pair[1];
+            const v0 = pointPositions[idx0];
+            const v1 = pointPositions[idx1];
+            if (v0 && v1) {
+              const geometry = new THREE.BufferGeometry().setFromPoints([v0, v1]);
+              const line = new THREE.Line(geometry, lineMaterial);
+              scene.add(line);
+            }
+          });
+        }
         
         // カメラ位置を設定（全体が見渡せる位置に）
         camera.position.set(0, 0, 150);
