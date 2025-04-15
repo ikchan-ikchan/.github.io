@@ -2,7 +2,7 @@
 <html>
   <head>
     <meta charset="UTF-8">
-    <title>MediaPipe Pose: カメラ選択, FPS, 解像度指定 & 記録 + 3D表示デモ</title>
+    <title>MediaPipe Pose: カメラ選択, FPS, 解像度指定 & 記録 + 3D表示（回転可能・タッチ対応）デモ</title>
     <style>
       body {
         font-family: sans-serif;
@@ -38,7 +38,7 @@
     </style>
   </head>
   <body>
-    <h2>MediaPipe Pose: カメラ選択, FPS, 解像度指定 & 記録 + 3D表示デモ</h2>
+    <h2>MediaPipe Pose: カメラ選択, FPS, 解像度指定 & 記録 + 3D表示（回転可能・タッチ対応）デモ</h2>
     <div id="controls">
       <label for="cameraSelect">カメラ選択:</label>
       <select id="cameraSelect"></select>
@@ -70,6 +70,8 @@
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
     <!-- Three.js の読み込み -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <!-- OrbitControls の読み込み（タッチ操作も対応） -->
+    <script src="https://threejs.org/examples/js/controls/OrbitControls.js"></script>
     
     <script>
       const video = document.getElementById('video');
@@ -133,7 +135,7 @@
         });
       }
       
-      // ③ 選択したカメラで、最大解像度の何％かを指定してストリーム取得
+      // ③ 選択したカメラで、最大解像度の何％かを指定して映像を取得する
       async function startCamera() {
         const selectedDeviceId = cameraSelect.value;
         const tempConstraints = { video: { deviceId: { exact: selectedDeviceId } } };
@@ -180,7 +182,7 @@
         }
       }
       
-      // ④ MediaPipe Pose に映像フレームを送信するループ
+      // ④ 映像フレームを MediaPipe Pose に送信するループ
       async function processVideo() {
         const frameRate = parseInt(frameRateInput.value) || 15;
         const interval = 1000 / frameRate;
@@ -200,12 +202,9 @@
         processVideo();
       });
       
-      // ⑥ 「記録」ボタン押下時の処理：ループ停止、座標テーブルおよび 3D 図を表示
+      // ⑥ 「記録」ボタン押下時の処理：ループ停止、座標テーブルおよび 3D 表示を更新
       captureButton.addEventListener('click', () => {
-        // 映像送信ループ停止
         clearTimeout(processingLoopId);
-        
-        // 座標テーブルの表示
         if (latestResults && latestResults.poseLandmarks) {
           let html = '<h3>記録された座標 (x, y, z)</h3>';
           html += '<table>';
@@ -228,33 +227,35 @@
         }
       });
       
-      // ⑦ Three.js を用いた 3D 表示関数
+      // ⑦ Three.js を用いた 3D 表示関数（OrbitControls でタッチやマウスによる回転・ズーム対応）
       function draw3DPoints(landmarks) {
-        // 既存のシーンがあればクリア
+        // 既存シーンのクリア
         threeContainer.innerHTML = '';
         
-        // シーン・カメラ・レンダラーの作成
+        // シーン、カメラ、レンダラーの作成
         const scene = new THREE.Scene();
         const camera = new THREE.PerspectiveCamera(75, threeContainer.clientWidth / threeContainer.clientHeight, 0.1, 1000);
         const renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(threeContainer.clientWidth, threeContainer.clientHeight);
         threeContainer.appendChild(renderer.domElement);
         
-        // 軽いライト
+        // OrbitControls の設定（デフォルトでタッチ操作にも対応）
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;       // 慣性回転有効
+        controls.dampingFactor = 0.1;
+        controls.screenSpacePanning = true;
+        
+        // 環境光を追加
         const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
         scene.add(ambientLight);
         
-        // 点を表示するためのパラメータ
+        // 各ランドマークを小さな球体として追加
         const pointGeometry = new THREE.SphereGeometry(2, 16, 16);
         const pointMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
-        
-        // 各ランドマークを追加
-        // ※ MediaPipe の x,y は normalized (0～1)、z は相対値。
-        // 以下の例では、中心 (0,0) を画面中心とし、x を (x - 0.5)*100, y を (0.5 - y)*100（上下反転）、z を z*100 として配置。
         landmarks.forEach(landmark => {
-          // 点が取得できているか（非 null なら）
           if (landmark) {
             const sphere = new THREE.Mesh(pointGeometry, pointMaterial);
+            // MediaPipe の normalized 座標を変換
             sphere.position.x = (landmark.x - 0.5) * 100;
             sphere.position.y = (0.5 - landmark.y) * 100;
             sphere.position.z = landmark.z * 100;
@@ -262,11 +263,16 @@
           }
         });
         
-        // カメラ位置を設定（全体が見えるように）
+        // カメラ位置の設定（全体が見渡せる位置に配置）
         camera.position.set(0, 0, 150);
         
-        // シンプルなレンダリング（静止画として表示）
-        renderer.render(scene, camera);
+        // アニメーションループ（OrbitControls によりマウス・タッチ操作で回転、ズーム可能）
+        function animate() {
+          requestAnimationFrame(animate);
+          controls.update();
+          renderer.render(scene, camera);
+        }
+        animate();
       }
       
       // ページ読み込み時にカメラを列挙
