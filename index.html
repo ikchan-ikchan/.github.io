@@ -2,366 +2,247 @@
 <html>
   <head>
     <meta charset="UTF-8">
-    <title>OpenPose (OpenCV.js DNN) でポーズ推定 + 3D表示（回転・タッチ対応、灰色地面付き）デモ</title>
+    <title>OpenCV.js OpenPose: 記録＋3D表示デモ</title>
     <style>
-      body {
-        font-family: sans-serif;
-        text-align: center;
-      }
-      video, canvas {
-        display: block;
-        margin: 10px auto;
-      }
-      #controls {
-        margin: 10px;
-      }
-      #maxResolutionInfo, #poseCoordinates {
-        margin-top: 5px;
-        font-size: 0.9em;
-        color: #555;
-      }
-      table {
-        margin: auto;
-        border-collapse: collapse;
-      }
-      table, th, td {
-        border: 1px solid #aaa;
-        padding: 4px;
-      }
-      /* 3D 表示エリアのスタイル */
-      #threeContainer {
-        margin: 10px auto;
-        width: 640px;
-        height: 300px;
-        border: 1px solid #ccc;
-      }
+      body { font-family: sans-serif; text-align: center; }
+      video, canvas { display: block; margin: 10px auto; }
+      #controls { margin: 10px; }
+      #maxResolutionInfo,#poseCoordinates { margin-top: 5px; font-size:0.9em; color:#555; }
+      table { margin:auto; border-collapse:collapse; }
+      table,th,td { border:1px solid #aaa; padding:4px; }
+      #threeContainer { margin:10px auto; width:640px; height:300px; border:1px solid #ccc; }
     </style>
   </head>
   <body>
-    <h2>OpenPose (OpenCV.js DNN) を用いたポーズ推定＆3D表示デモ</h2>
+    <h2>OpenCV.js OpenPose: カメラ選択／FPS／解像度／記録＋3D表示デモ</h2>
     <div id="controls">
-      <label for="cameraSelect">カメラ選択:</label>
+      <label>カメラ:</label>
       <select id="cameraSelect"></select>
-      &nbsp;&nbsp;
-      <label for="frameRateInput">フレームレート (fps):</label>
-      <input type="number" id="frameRateInput" min="1" value="15" style="width:60px;">
-      &nbsp;&nbsp;
-      <label for="resPercentInput">解像度 (%):</label>
-      <input type="number" id="resPercentInput" min="1" max="100" value="100" style="width:60px;">
-      &nbsp;&nbsp;
+      &nbsp;
+      <label>FPS:</label>
+      <input id="frameRateInput" type="number" min="1" value="15" style="width:60px;">
+      &nbsp;
+      <label>解像度 %:</label>
+      <input id="resPercentInput" type="number" min="1" max="100" value="100" style="width:60px;">
+      &nbsp;
       <button id="startButton">開始</button>
-      &nbsp;&nbsp;
+      &nbsp;
       <button id="captureButton">記録</button>
       <div id="maxResolutionInfo"></div>
     </div>
-    
-    <!-- カメラ映像（内部利用・表示は2Dキャンバスに描画） -->
+
     <video id="video" autoplay muted playsinline style="display:none;"></video>
-    <!-- 2D 表示用キャンバス -->
     <canvas id="outputCanvas"></canvas>
-    
-    <!-- 座標テーブル表示用 -->
     <div id="poseCoordinates"></div>
-    <!-- 3D 表示用コンテナ -->
     <div id="threeContainer"></div>
-    
-    <!-- OpenCV.js の読み込み -->
-    <script async src="https://docs.opencv.org/4.x/opencv.js" onload="onOpenCvReady();" onerror="console.error('OpenCV.js の読み込みに失敗しました。');"></script>
-    <!-- Three.js と OrbitControls の読み込み -->
+
+    <!-- OpenCV.js (3.4.0 build with DNN) -->
+    <script async src="https://docs.opencv.org/3.4.0/opencv.js" onload="onOpenCvReady();" ></script>
+    <!-- Three.js + OrbitControls -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://unpkg.com/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
-    
+
     <script>
-      // --- グローバル変数 ---
-      let net = null;  // OpenPose 用ネットワーク
+    // モデル定義ファイルと重みファイルを CDN から直接読み込み
+    const protoUrl  = 'https://raw.githubusercontent.com/CMU-Perceptual-Computing-Lab/openpose/master/models/pose/coco/pose_deploy_linevec.prototxt';
+    const modelUrl  = 'https://raw.githubusercontent.com/CMU-Perceptual-Computing-Lab/openpose/master/models/pose/coco/pose_iter_440000.caffemodel';
+    // COCO 用 18 キーポイントの接続ペア
+    const POSE_PAIRS = [
+      [1,2],[1,5],[2,3],[3,4],[5,6],[6,7],
+      [1,8],[8,9],[9,10],[1,11],[11,12],[12,13],
+      [1,0],[0,14],[14,16],[0,15],[15,17]
+    ];
+
+    let net = null;
+    let cap = null;
+    let src = null;
+    let processingLoopId = null;
+    let latestKeypoints = null;
+
+    // UI 要素
+    const video = document.getElementById('video');
+    const outputCanvas = document.getElementById('outputCanvas');
+    const canvasCtx = outputCanvas.getContext('2d');
+    const cameraSelect = document.getElementById('cameraSelect');
+    const frameRateInput = document.getElementById('frameRateInput');
+    const resPercentInput = document.getElementById('resPercentInput');
+    const startButton = document.getElementById('startButton');
+    const captureButton = document.getElementById('captureButton');
+    const maxResolutionInfo = document.getElementById('maxResolutionInfo');
+    const poseCoordinatesDiv = document.getElementById('poseCoordinates');
+    const threeContainer = document.getElementById('threeContainer');
+
+    // 1. OpenCV.js 読み込み完了後に呼ばれる
+    function onOpenCvReady() {
+      console.log('OpenCV.js ready');
+      // モデルの読み込み（Caffe → Net）
+      net = cv.readNetFromCaffe(protoUrl, modelUrl);
+      if (net.empty()) {
+        console.error('OpenPose モデルの読み込み失敗');
+        return;
+      }
+      console.log('OpenPose モデル読み込み成功');
+      enumerateCameras();
+    }
+
+    // 2. カメラ列挙
+    async function enumerateCameras() {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      devices.filter(d => d.kind==='videoinput')
+             .forEach((d,i) => {
+               const opt = document.createElement('option');
+               opt.value = d.deviceId;
+               opt.text = d.label||`カメラ ${i+1}`;
+               cameraSelect.appendChild(opt);
+             });
+    }
+
+    // 3. カメラ起動・解像度・FPS 設定
+    async function startCamera() {
+      if (cap) { // 前のストリームがあれば停止
+        cap.video.srcObject.getTracks().forEach(t=>t.stop());
+      }
+      // 最大解像度を調べる
+      const tmp = await navigator.mediaDevices.getUserMedia({video:{deviceId:{exact:cameraSelect.value}}});
+      const tr = tmp.getVideoTracks()[0];
+      const caps = tr.getCapabilities();
+      tr.stop();
+      const maxW = caps.width.max, maxH = caps.height.max;
+      maxResolutionInfo.innerText = `最大解像度: ${maxW}×${maxH}`;
+      // ユーザ指定％
+      const p = parseInt(resPercentInput.value)/100;
+      const w = Math.floor(maxW*p), h = Math.floor(maxH*p);
+      const fps = parseInt(frameRateInput.value);
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video:{
+          deviceId:{exact:cameraSelect.value},
+          width:{exact:w}, height:{exact:h}, frameRate:{ideal:fps}
+        }
+      });
+      video.srcObject = stream;
+      await new Promise(r=>video.onloadedmetadata=r);
+      outputCanvas.width = video.videoWidth;
+      outputCanvas.height = video.videoHeight;
+      cap = new cv.VideoCapture(video);
+      src = new cv.Mat(video.videoHeight, video.videoWidth, cv.CV_8UC4);
+    }
+
+    // 4. OpenPose 推論 & 描画ループ
+    function processVideo() {
+      const interval = 1000/parseInt(frameRateInput.value);
       const inWidth = 368, inHeight = 368;
-      const threshold = 0.1;
-      let cap = null;  // cv.VideoCapture
-      let processingLoopId = null;
-      let latestResults = null;  // { poseLandmarks: [...] }
-      
-      // --- DOM 要素 ---
-      const video = document.getElementById('video');
-      const outputCanvas = document.getElementById('outputCanvas');
-      const canvasCtx = outputCanvas.getContext('2d');
-      const cameraSelect = document.getElementById('cameraSelect');
-      const frameRateInput = document.getElementById('frameRateInput');
-      const resPercentInput = document.getElementById('resPercentInput');
-      const startButton = document.getElementById('startButton');
-      const captureButton = document.getElementById('captureButton');
-      const maxResolutionInfo = document.getElementById('maxResolutionInfo');
-      const poseCoordinatesDiv = document.getElementById('poseCoordinates');
-      const threeContainer = document.getElementById('threeContainer');
-      
-      // --- OpenCV.js の初期化完了時 ---
-      function onOpenCvReady() {
-        console.log('OpenCV.js is ready.');
-        enumerateCameras();
-      }
-      
-      // ① 利用可能なカメラの列挙
-      async function enumerateCameras() {
-        try {
-          const devices = await navigator.mediaDevices.enumerateDevices();
-          const videoDevices = devices.filter(device => device.kind === 'videoinput');
-          cameraSelect.innerHTML = '';
-          videoDevices.forEach((device, index) => {
-            const option = document.createElement('option');
-            option.value = device.deviceId;
-            option.text = device.label || `カメラ ${index + 1}`;
-            cameraSelect.appendChild(option);
-          });
-        } catch (error) {
-          console.error('カメラの列挙に失敗:', error);
-        }
-      }
-      
-      // ② OpenPose モデルの初期化（CDN から自動ダウンロード）
-      function initializeOpenPose() {
-        // ここでは、OpenCV.js の DNN モジュールを用いて
-        // CMU OpenPose COCOモデルの prototxt と caffemodel を URL 経由で読み込みます。
-        const protoUrl = 'https://raw.githubusercontent.com/opencv/opencv_extra/master/testdata/dnn/pose_deploy_linevec.prototxt';
-        const caffeModelUrl = 'https://raw.githubusercontent.com/opencv/opencv_extra/master/testdata/dnn/pose_iter_440000.caffemodel';
-        try {
-          net = cv.readNetFromCaffe(protoUrl, caffeModelUrl);
-          if (net.empty()) {
-            console.error("ネットワークが空です。DNN モジュール有効の OpenCV.js を使用してください。");
-          } else {
-            console.log("OpenPoseネットワークの読み込みに成功しました。");
-          }
-        } catch (err) {
-          console.error("ネットワークの読み込みエラー:", err);
-        }
-      }
-      
-      // ③ カメラ映像の取得（以前と同様：最大解像度の％指定）
-      async function startCamera() {
-        const selectedDeviceId = cameraSelect.value;
-        // まず制約なしでストリームを取得して capabilities を調べる
-        const tempConstraints = { video: { deviceId: { exact: selectedDeviceId } } };
-        let tempStream;
-        try {
-          tempStream = await navigator.mediaDevices.getUserMedia(tempConstraints);
-        } catch (error) {
-          console.error('初回ストリームの取得に失敗:', error);
-          return;
-        }
-        const videoTrack = tempStream.getVideoTracks()[0];
-        const capabilities = videoTrack.getCapabilities();
-        let maxWidth = (capabilities.width && capabilities.width.max) || 640;
-        let maxHeight = (capabilities.height && capabilities.height.max) || 480;
-        maxResolutionInfo.innerText = `このカメラの最大解像度: ${maxWidth} x ${maxHeight}`;
-        tempStream.getTracks().forEach(track => track.stop());
-        
-        const resPercent = parseInt(resPercentInput.value) || 100;
-        const desiredWidth = Math.floor(maxWidth * (resPercent / 100));
-        const desiredHeight = Math.floor(maxHeight * (resPercent / 100));
-        const frameRate = parseInt(frameRateInput.value) || 15;
-        
-        const constraints = {
-          video: {
-            deviceId: { exact: selectedDeviceId },
-            width: { exact: desiredWidth },
-            height: { exact: desiredHeight },
-            frameRate: { ideal: frameRate }
-          }
-        };
-        try {
-          const stream = await navigator.mediaDevices.getUserMedia(constraints);
-          video.srcObject = stream;
-          return new Promise(resolve => {
-            video.onloadedmetadata = () => {
-              outputCanvas.width = video.videoWidth;
-              outputCanvas.height = video.videoHeight;
-              video.play();
-              // cv.VideoCapture を初期化
-              cap = new cv.VideoCapture(video);
-              resolve();
-            };
-          });
-        } catch (error) {
-          console.error('カメラ映像の取得に失敗:', error);
-        }
-      }
-      
-      // ④ OpenPose を用いた映像フレーム処理ループ
-      async function processVideoOpenPose() {
-        const frameRate = parseInt(frameRateInput.value) || 15;
-        const interval = 1000 / frameRate;
-        // 入力フレーム用 Mat を用意
-        let src = new cv.Mat(video.videoHeight, video.videoWidth, cv.CV_8UC4);
-        async function sendFrame() {
-          if (!video.paused && !video.ended) {
-            // キャプチャ
-            cap.read(src);
-            // 前処理：正規化とリサイズ
-            let blob = cv.blobFromImage(src, 1/255, new cv.Size(inWidth, inHeight), new cv.Scalar(0,0,0), false, false);
-            net.setInput(blob);
-            let output = net.forward();
-            // 出力サイズ（heatmap のサイズ）
-            let outH = output.size(2);
-            let outW = output.size(3);
-            // OpenPose COCOモデルのポイント数（通常 18 点）
-            const nPoints = 18;
-            let points = [];
-            // output.data32F は出力の Float32Array（形状: [1, nPoints, outH, outW]）
-            let data = output.data32F;
-            for (let n = 0; n < nPoints; n++){
-              let maxVal = -1;
-              let maxX = 0, maxY = 0;
-              for (let i = 0; i < outH; i++){
-                for (let j = 0; j < outW; j++){
-                  let idx = n * outH * outW + i * outW + j;
-                  let val = data[idx];
-                  if(val > maxVal){
-                    maxVal = val;
-                    maxX = j;
-                    maxY = i;
-                  }
-                }
-              }
-              // 座標を元の映像サイズにスケール
-              let x = (video.videoWidth * maxX) / outW;
-              let y = (video.videoHeight * maxY) / outH;
-              if(maxVal > threshold){
-                points.push({x: x, y: y, z: 0}); // OpenPose は基本2Dなので z=0
-              } else {
-                points.push(null);
-              }
+      async function detect() {
+        cap.read(src);
+        // 前処理 Blob
+        const blob = cv.blobFromImage(src, 1/255, new cv.Size(inWidth,inHeight),
+                                      new cv.Scalar(0,0,0), false, false);
+        net.setInput(blob);
+        const out = net.forward(); // shape [1,19,H,W]
+        const H = out.size(2), W = out.size(3);
+        // 各チャネルの最大位置を探して keypoint 抽出
+        latestKeypoints = [];
+        for (let c=0;c<18;c++){
+          let best = {val:-1,x:0,y:0};
+          for(let y=0;y<H;y++){
+            for(let x=0;x<W;x++){
+              const v = out.floatAt(0,c,y,x);
+              if (v>best.val) best={val:v,x,y};
             }
-            // 最新結果を保存
-            latestResults = { poseLandmarks: points };
-            // 2D 表示：背景として映像を描画し、円と線を描く
-            canvasCtx.clearRect(0, 0, outputCanvas.width, outputCanvas.height);
-            canvasCtx.drawImage(video, 0, 0, outputCanvas.width, outputCanvas.height);
-            // キーポイントを描画
-            canvasCtx.fillStyle = 'red';
-            for (let i = 0; i < points.length; i++){
-              if(points[i]){
-                canvasCtx.beginPath();
-                canvasCtx.arc(points[i].x, points[i].y, 5, 0, 2*Math.PI);
-                canvasCtx.fill();
-              }
-            }
-            // POSE_PAIRS（COCO定義の接続）を描画
-            const POSE_PAIRS = [
-              [1, 2], [1, 5],
-              [2, 3], [3, 4],
-              [5, 6], [6, 7],
-              [1, 8], [8, 9],
-              [9, 10],
-              [1, 11], [11, 12],
-              [12, 13],
-              [1, 0], [0, 14],
-              [14, 16],
-              [0, 15], [15, 17]
-            ];
-            canvasCtx.strokeStyle = 'lime';
-            canvasCtx.lineWidth = 2;
-            POSE_PAIRS.forEach(pair => {
-              let p1 = points[pair[0]];
-              let p2 = points[pair[1]];
-              if(p1 && p2){
-                canvasCtx.beginPath();
-                canvasCtx.moveTo(p1.x, p1.y);
-                canvasCtx.lineTo(p2.x, p2.y);
-                canvasCtx.stroke();
-              }
+          }
+          if(best.val>0.1){
+            latestKeypoints.push({
+              x: best.x/W,
+              y: best.y/H,
+              score: best.val
             });
-            blob.delete();
-            output.delete();
+          } else latestKeypoints.push(null);
+        }
+        // 2D 描画
+        canvasCtx.drawImage(video,0,0);
+        for(const p of POSE_PAIRS){
+          const a=latestKeypoints[p[0]], b=latestKeypoints[p[1]];
+          if(a&&b){
+            canvasCtx.strokeStyle='lime';
+            canvasCtx.lineWidth=2;
+            canvasCtx.beginPath();
+            canvasCtx.moveTo(a.x*video.videoWidth,a.y*video.videoHeight);
+            canvasCtx.lineTo(b.x*video.videoWidth,b.y*video.videoHeight);
+            canvasCtx.stroke();
           }
-          processingLoopId = setTimeout(sendFrame, interval);
         }
-        sendFrame();
+        blob.delete(); out.delete();
+        processingLoopId = setTimeout(detect, interval);
       }
-      
-      // ⑤ 「開始」ボタン押下時の処理：カメラ起動、OpenPose 初期化、ループ開始
-      startButton.addEventListener('click', async () => {
-        await startCamera();
-        initializeOpenPose();
-        processVideoOpenPose();
-      });
-      
-      // ⑥ 「記録」ボタン押下時の処理：ループ停止、座標テーブルおよび 3D 表示を更新
-      captureButton.addEventListener('click', () => {
-        clearTimeout(processingLoopId);
-        if (latestResults && latestResults.poseLandmarks) {
-          let html = '<h3>記録された座標 (x, y, z)</h3>';
-          html += '<table>';
-          html += '<tr><th>Index</th><th>x</th><th>y</th><th>z</th></tr>';
-          latestResults.poseLandmarks.forEach((landmark, index) => {
-            html += `<tr>
-                        <td>${index}</td>
-                        <td>${landmark ? landmark.x.toFixed(3) : '-'}</td>
-                        <td>${landmark ? landmark.y.toFixed(3) : '-'}</td>
-                        <td>${landmark ? landmark.z.toFixed(3) : '-'}</td>
-                     </tr>`;
-          });
-          html += '</table>';
-          poseCoordinatesDiv.innerHTML = html;
-          draw3DPoints(latestResults.poseLandmarks);
-        } else {
-          poseCoordinatesDiv.innerHTML = '<p>まだポーズが検出されていません。</p>';
-          threeContainer.innerHTML = '';
-        }
-      });
-      
-      // ⑦ Three.js を用いた 3D 表示関数（OrbitControls、灰色の地面付き、回転・タッチ操作対応）
-      function draw3DPoints(landmarks) {
-        // 既存シーンをクリア
-        threeContainer.innerHTML = '';
-        // シーン、カメラ、レンダラーの生成
-        const scene = new THREE.Scene();
-        const camera = new THREE.PerspectiveCamera(75, threeContainer.clientWidth / threeContainer.clientHeight, 0.1, 1000);
-        const renderer = new THREE.WebGLRenderer({ antialias: true });
-        renderer.setSize(threeContainer.clientWidth, threeContainer.clientHeight);
-        threeContainer.appendChild(renderer.domElement);
-        
-        // OrbitControls の設定（ダンピング有効）
-        const controls = new THREE.OrbitControls(camera, renderer.domElement);
-        controls.enableDamping = true;
-        controls.dampingFactor = 0.1;
-        controls.screenSpacePanning = true;
-        
-        // 環境光
-        const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
-        scene.add(ambientLight);
-        
-        // 灰色の地面（グラウンドプレーン）の追加
-        const planeGeometry = new THREE.PlaneGeometry(400, 400);
-        const planeMaterial = new THREE.MeshLambertMaterial({ color: 0x808080 });
-        const plane = new THREE.Mesh(planeGeometry, planeMaterial);
-        plane.rotation.x = -Math.PI / 2;
-        plane.position.y = -50;
-        scene.add(plane);
-        
-        // 各ランドマークを小さな球体として配置（z は 0 のため、そのまま）
-        const pointGeometry = new THREE.SphereGeometry(2, 16, 16);
-        const pointMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
-        landmarks.forEach(landmark => {
-          if (landmark) {
-            const sphere = new THREE.Mesh(pointGeometry, pointMaterial);
-            // MediaPipe（もしくは OpenPose ）の normalized 座標を変換：
-            sphere.position.x = (landmark.x - 0.5) * 100;
-            sphere.position.y = (0.5 - landmark.y) * 100;
-            sphere.position.z = landmark.z * 100;
-            scene.add(sphere);
+      detect();
+    }
+
+    // 5. クリックイベント
+    startButton.onclick = async ()=>{
+      await startCamera();
+      initializePose();    // モデルは既にロード済みなので内部では何もしませんが呼んでOK
+      processVideo();
+    };
+    captureButton.onclick = ()=>{
+      clearTimeout(processingLoopId);
+      // テーブル描画
+      if(latestKeypoints){
+        let html = '<h3>記録された座標 (正規化 x, y, confidence)</h3>';
+        html += '<table><tr><th>Idx</th><th>x</th><th>y</th><th>c</th></tr>';
+        latestKeypoints.forEach((kp,i)=>{
+          if(kp){
+            html+=`<tr><td>${i}</td>
+                    <td>${kp.x.toFixed(3)}</td>
+                    <td>${kp.y.toFixed(3)}</td>
+                    <td>${kp.score.toFixed(3)}</td></tr>`;
           }
         });
-        
-        // カメラ位置（全体が見渡せる位置に）
-        camera.position.set(0, 0, 150);
-        
-        // アニメーションループ（OrbitControls 更新）
-        function animate() {
-          requestAnimationFrame(animate);
-          controls.update();
-          renderer.render(scene, camera);
-        }
-        animate();
+        html+='</table>';
+        poseCoordinatesDiv.innerHTML = html;
+        draw3DPoints(latestKeypoints);
       }
-      
+    };
+
+    // 6. Three.js で 3D 表示＋灰色地面＋OrbitControls
+    function draw3DPoints(kps){
+      threeContainer.innerHTML = '';
+      const scene = new THREE.Scene();
+      const camera = new THREE.PerspectiveCamera(75,
+             threeContainer.clientWidth/threeContainer.clientHeight,0.1,1000);
+      const renderer = new THREE.WebGLRenderer({antialias:true});
+      renderer.setSize(threeContainer.clientWidth,threeContainer.clientHeight);
+      threeContainer.appendChild(renderer.domElement);
+
+      const controls = new THREE.OrbitControls(camera,renderer.domElement);
+      controls.enableDamping=true; controls.dampingFactor=0.1;
+
+      // 灰色地面
+      const pg = new THREE.PlaneGeometry(400,400);
+      const pm = new THREE.MeshLambertMaterial({color:0x888888});
+      const plane = new THREE.Mesh(pg,pm);
+      plane.rotation.x = -Math.PI/2; plane.position.y = -50;
+      scene.add(plane);
+
+      // 環境光
+      scene.add(new THREE.AmbientLight(0xffffff,0.8));
+
+      // ポイント
+      const geom = new THREE.SphereGeometry(2,16,16);
+      const mat = new THREE.MeshBasicMaterial({color:0xff0000});
+      kps.forEach(kp=>{
+        if(kp){
+          const m = new THREE.Mesh(geom,mat);
+          m.position.set((kp.x-0.5)*200,(0.5-kp.y)*200,kp.score*100);
+          scene.add(m);
+        }
+      });
+      camera.position.set(0,0,300);
+
+      (function animate(){
+        requestAnimationFrame(animate);
+        controls.update();
+        renderer.render(scene,camera);
+      })();
+    }
     </script>
   </body>
 </html>
