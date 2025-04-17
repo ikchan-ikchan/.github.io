@@ -16,9 +16,12 @@
   <body>
     <h2>OpenPose with OpenCV.js: 自動モデルDL & ポーズ検出デモ</h2>
     <div id="controls">
-      <label>カメラ:</label><select id="cameraSelect"></select>
-      &nbsp;<label>FPS:</label><input id="frameRateInput" type="number" min="1" value="15" style="width:60px">
-      &nbsp;<label>解像度 %:</label><input id="resPercentInput" type="number" min="1" max="100" value="100" style="width:60px">
+      <label>カメラ:</label>
+      <select id="cameraSelect"></select>
+      &nbsp;<label>FPS:</label>
+      <input id="frameRateInput" type="number" min="1" value="15" style="width:60px">
+      &nbsp;<label>解像度 %:</label>
+      <input id="resPercentInput" type="number" min="1" max="100" value="100" style="width:60px">
       &nbsp;<button id="startButton">開始</button>
       &nbsp;<button id="captureButton">記録</button>
       <div id="maxResolutionInfo"></div>
@@ -39,7 +42,7 @@
     <script>
     // --- 設定 ---
     const protoUrl  = 'https://raw.githubusercontent.com/opencv/opencv_extra/master/testdata/dnn/openpose_pose_coco.prototxt';
-    const modelUrl  = 'https://www.dropbox.com/s/2h2bv29a130sgrk/pose_iter_440000.caffemodel?dl=1';
+    const modelUrl  = 'https://raw.githubusercontent.com/opencv/opencv_extra/master/testdata/dnn/openpose/pose_iter_440000.caffemodel';
     const inWidth   = 368, inHeight = 368, threshold = 0.1;
     const KEYPOINTS = ["Nose","Neck","RShoulder","RElbow","RWrist","LShoulder","LElbow","LWrist","RHip","RKnee","RAnkle","LHip","LKnee","LAnkle","REye","LEye","REar","LEar"];
     const POSE_PAIRS= [[1,2],[1,5],[2,3],[3,4],[5,6],[6,7],[1,8],[8,9],[9,10],[1,11],[11,12],[12,13],[1,0],[0,14],[14,16],[0,15],[15,17]];
@@ -70,11 +73,11 @@
     // モデルDL＆FS書き込み
     async function loadModel(){
       if(net) return;
-      // prototxt
-      let r1=await fetch(protoUrl), buf1=await r1.arrayBuffer();
+      // prototxt を自動でダウンロード
+      let r1 = await fetch(protoUrl), buf1 = await r1.arrayBuffer();
       cv.FS_createDataFile('/', 'openpose.prototxt', new Uint8Array(buf1), true, false, false);
-      // caffemodel
-      let r2=await fetch(modelUrl), buf2=await r2.arrayBuffer();
+      // caffemodel を自動でダウンロード
+      let r2 = await fetch(modelUrl), buf2 = await r2.arrayBuffer();
       cv.FS_createDataFile('/', 'openpose.caffemodel', new Uint8Array(buf2), true, false, false);
       net = cv.readNetFromCaffe('openpose.prototxt','openpose.caffemodel');
     }
@@ -87,42 +90,58 @@
       tmp.getTracks().forEach(t=>t.stop());
       let maxW = caps.width?.max||640, maxH = caps.height?.max||480;
       document.getElementById('maxResolutionInfo').innerText=`最大解像度: ${maxW}×${maxH}`;
-      let pct=+resPercentInput.value/100, w=Math.floor(maxW*pct), h=Math.floor(maxH*pct), fps=+frameRateInput.value;
-      let stream = await navigator.mediaDevices.getUserMedia({video:{deviceId:{exact:deviceId},width:{exact:w},height:{exact:h},frameRate:{ideal:fps}}});
-      let v=document.getElementById('video'); v.srcObject=stream;
+      let pct=+resPercentInput.value/100,
+          w=Math.floor(maxW*pct),
+          h=Math.floor(maxH*pct),
+          fps=+frameRateInput.value;
+      let stream = await navigator.mediaDevices.getUserMedia({
+        video:{
+          deviceId:{exact:deviceId},
+          width:{exact:w},
+          height:{exact:h},
+          frameRate:{ideal:fps}
+        }
+      });
+      let v=document.getElementById('video');
+      v.srcObject=stream;
       await new Promise(r=>v.onloadedmetadata=r);
       let c=document.getElementById('outputCanvas');
-      c.width=v.videoWidth; c.height=v.videoHeight;
+      c.width=v.videoWidth;
+      c.height=v.videoHeight;
       v.play();
     }
 
     // フレーム処理
     function processVideo(){
-      const v=document.getElementById('video'), c=document.getElementById('outputCanvas'), ctx=c.getContext('2d');
-      let srcRGBA=new cv.Mat(v.videoHeight,v.videoWidth,cv.CV_8UC4),
+      const v=document.getElementById('video'),
+            c=document.getElementById('outputCanvas'),
+            ctx=c.getContext('2d');
+      let srcRGBA=new cv.Mat(v.videoHeight, v.videoWidth, cv.CV_8UC4),
           srcBGR=new cv.Mat();
       async function detect(){
         ctx.drawImage(v,0,0);
         srcRGBA.data.set(ctx.getImageData(0,0,v.videoWidth,v.videoHeight).data);
-        cv.cvtColor(srcRGBA,srcBGR,cv.COLOR_RGBA2BGR);
-        let blob=cv.blobFromImage(srcBGR,1.0/255,new cv.Size(inWidth,inHeight),new cv.Scalar(0,0,0),false,false);
+        cv.cvtColor(srcRGBA, srcBGR, cv.COLOR_RGBA2BGR);
+        let blob = cv.blobFromImage(srcBGR,1.0/255, new cv.Size(inWidth,inHeight), new cv.Scalar(0,0,0), false, false);
         net.setInput(blob);
-        let out=net.forward();
+        let out = net.forward();
         let h=out.size(2), w_=out.size(3), pts=[];
         for(let i=0;i<KEYPOINTS.length;i++){
-          let data=out.data32F.subarray(i*h*w_,(i+1)*h*w_);
+          let data = out.data32F.subarray(i*h*w_, (i+1)*h*w_);
           let maxV=-1, idx=0;
-          data.forEach((v,j)=>{if(v>maxV){maxV=v;idx=j;}});
+          data.forEach((v,j)=>{ if(v>maxV){ maxV=v; idx=j; } });
           let y=Math.floor(idx/w_), x=idx%w_;
           let px=v.videoWidth*x/w_, py=v.videoHeight*y/h;
           pts.push(maxV>threshold?{x:px,y:py,z:maxV}:null);
         }
         latestResults={points:pts};
         ctx.drawImage(v,0,0);
-        ctx.strokeStyle='lime'; ctx.fillStyle='red';
-        pts.forEach(p=>{ if(p){ctx.beginPath();ctx.arc(p.x,p.y,5,0,2*Math.PI);ctx.fill();}});
-        blob.delete(); out.delete();
-        processingLoopId=setTimeout(detect,1000/+frameRateInput.value);
+        ctx.strokeStyle='lime';
+        ctx.fillStyle='red';
+        pts.forEach(p=>{ if(p){ ctx.beginPath(); ctx.arc(p.x,p.y,5,0,2*Math.PI); ctx.fill(); } });
+        blob.delete();
+        out.delete();
+        processingLoopId=setTimeout(detect, 1000/+frameRateInput.value);
       }
       detect();
     }
@@ -130,48 +149,66 @@
     // 記録
     function onCapture(){
       clearTimeout(processingLoopId);
-      if(!latestResults?.points){ poseCoordinatesDiv.innerHTML='<p>検出なし</p>'; return; }
+      if(!latestResults?.points){
+        poseCoordinatesDiv.innerHTML='<p>検出なし</p>';
+        return;
+      }
       let html='<h3>記録された座標</h3><table><tr><th>#</th><th>x</th><th>y</th><th>z</th></tr>';
       latestResults.points.forEach((p,i)=>{
-        html+=`<tr><td>${i}</td>`+
-              (p?`<td>${p.x.toFixed(1)}</td><td>${p.y.toFixed(1)}</td><td>${p.z.toFixed(3)}</td>`:
-                 '<td colspan="3">null</td>')+
-              '</tr>';
+        html += `<tr><td>${i}</td>` +
+                (p
+                  ? `<td>${p.x.toFixed(1)}</td><td>${p.y.toFixed(1)}</td><td>${p.z.toFixed(3)}</td>`
+                  : '<td colspan="3">null</td>'
+                ) +
+                '</tr>';
       });
-      html+='</table>'; poseCoordinatesDiv.innerHTML=html;
+      html+='</table>';
+      poseCoordinatesDiv.innerHTML=html;
       draw3D(latestResults.points);
     }
 
     // 3D 描画
     function draw3D(points){
       threeContainer.innerHTML='';
-      const scene=new THREE.Scene(),
-            camera=new THREE.PerspectiveCamera(75,640/300,0.1,1000),
-            renderer=new THREE.WebGLRenderer({antialias:true});
-      renderer.setSize(640,300); threeContainer.appendChild(renderer.domElement);
-      const controls=new THREE.OrbitControls(camera,renderer.domElement);
-      controls.enableDamping=true; controls.dampingFactor=0.1;
+      const scene = new THREE.Scene(),
+            camera = new THREE.PerspectiveCamera(75, 640/300, 0.1, 1000),
+            renderer = new THREE.WebGLRenderer({antialias:true});
+      renderer.setSize(640,300);
+      threeContainer.appendChild(renderer.domElement);
+
+      const controls = new THREE.OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true;
+      controls.dampingFactor = 0.1;
+
       scene.add(new THREE.AmbientLight(0xffffff,0.8));
-      // 地面
-      const plane=new THREE.Mesh(
+
+      // 灰色の地面
+      const plane = new THREE.Mesh(
         new THREE.PlaneGeometry(400,400),
         new THREE.MeshLambertMaterial({color:0x808080})
       );
-      plane.rotation.x=-Math.PI/2; plane.position.y=-50; scene.add(plane);
+      plane.rotation.x = -Math.PI/2;
+      plane.position.y = -50;
+      scene.add(plane);
+
       // 点群
-      const geom=new THREE.SphereGeometry(2,16,16),
-            mat=new THREE.MeshBasicMaterial({color:0xff0000});
+      const geom = new THREE.SphereGeometry(2,16,16),
+            mat  = new THREE.MeshBasicMaterial({color:0xff0000});
       points.forEach(p=>{
         if(p){
-          let m=new THREE.Mesh(geom,mat);
-          m.position.set((p.x-320)/2,(240-p.y)/2,p.z*100);
+          let m = new THREE.Mesh(geom,mat);
+          m.position.set((p.x - 320)/2, (240 - p.y)/2, p.z*100);
           scene.add(m);
         }
       });
-      camera.position.set(0,0,150);
-      (function anim(){requestAnimationFrame(anim);controls.update();renderer.render(scene,camera);})();
-    }
 
+      camera.position.set(0,0,150);
+      (function animate(){
+        requestAnimationFrame(animate);
+        controls.update();
+        renderer.render(scene,camera);
+      })();
+    }
     </script>
   </body>
 </html>
