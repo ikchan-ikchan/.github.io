@@ -2,9 +2,8 @@
 <html>
 <head>
 <meta charset="UTF-8">
-<title>OpenPose on OpenCV.js (DNN) – full demo</title>
+<title>OpenPose on OpenCV.js – 3‑D ビュー付き</title>
 <style>
- /* ---- identical styling to the previous version ---- */
  body{font-family:sans-serif;text-align:center}
  video,canvas{display:block;margin:10px auto}
  #controls{margin:10px}
@@ -15,7 +14,7 @@
 </style>
 </head>
 <body>
-<h2>OpenPose on OpenCV.js + 3‑D viewer (rotatable)</h2>
+<h2>OpenPose on OpenCV.js + 3‑D viewer</h2>
 
 <div id="controls">
   <label>カメラ:</label><select id="cameraSelect"></select>
@@ -26,36 +25,28 @@
   <div id="maxResolutionInfo"></div>
 </div>
 
-<!-- video feed & 2‑D overlay -->
 <video id="video" playsinline autoplay muted style="display:none"></video>
 <canvas id="outputCanvas"></canvas>
 
-<!-- coordinates table & three‑js -->
 <div id="poseCoordinates"></div>
 <div id="threeContainer"></div>
 
-<!-- ▸▸ Libraries ------------------------------------------------------------------------- -->
+<!-- ライブラリ -->
 <script async src="https://docs.opencv.org/4.x/opencv.js"
-        onload="onOpenCvReady()"></script>     <!-- build WITH DNN -->
+        onload="onOpenCvReady()"></script>   <!-- DNN モジュール入り -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://unpkg.com/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
-<!-- ------------------------------------------------------------------------------------- -->
 
 <script>
-/* =============== 0. DOM short‑cuts =============== */
-const camSel  = q('#cameraSelect'),   fpsInp = q('#frameRate'),
-      resInp  = q('#resPercent'),     startB = q('#startBtn'),
-      capB    = q('#captureBtn'),     maxInfo= q('#maxResolutionInfo'),
-      vtag    = q('#video'),          canvas = q('#outputCanvas'),
-      ctx     = canvas.getContext('2d'),
-      coordDiv= q('#poseCoordinates'),threeDiv=q('#threeContainer');
-let latest   = null, loopId = null, net = null;
+const camSel=q('#cameraSelect'),fpsInp=q('#frameRate'),
+      resInp=q('#resPercent'),startB=q('#startBtn'),
+      capB=q('#captureBtn'),maxInfo=q('#maxResolutionInfo'),
+      vtag=q('#video'),canvas=q('#outputCanvas'),
+      ctx=canvas.getContext('2d'),coordDiv=q('#poseCoordinates'),
+      threeDiv=q('#threeContainer');
+let latest=null,loopId=null,net=null;
 
-/* -------------- helpers ---------------- */
-function q(sel){return document.querySelector(sel)}
-function sleep(ms){return new Promise(r=>setTimeout(r,ms))}
-
-/* =============== 1. camera enumeration =============== */
+function q(s){return document.querySelector(s);}
 async function listCams(){
   const devs=await navigator.mediaDevices.enumerateDevices();
   camSel.innerHTML='';
@@ -66,161 +57,116 @@ async function listCams(){
   });
 }
 
-/* =============== 2. OpenCV load & network init =============== */
 async function onOpenCvReady(){
-  // 2‑1 download caffemodel → OpenCV FS
-  console.log('OpenCV.js ready – downloading weights …');
+  /* 1. 重みを Dropbox からダウンロード */
   const wUrl='https://www.dropbox.com/s/2h2bv29a130sgrk/pose_iter_440000.caffemodel?dl=1';
-  const wResp=await fetch(wUrl); const wBuf=await wResp.arrayBuffer();
-  const wData=new Uint8Array(wBuf);
-  cv.FS_createDataFile('/', 'pose.caffemodel', wData, true, false, false);
-  console.log('weights stored in FS');
-
-  // 2‑2 load prototxt (raw GitHub Pages). **PUT YOUR OWN URL HERE**
-  const protoURL='openpose_pose_coco.prototxt';            // same folder
-  const pResp=await fetch(protoURL); const pTxt=await pResp.text();
-  cv.FS_createDataFile('/', 'pose.prototxt',
-                       new TextEncoder().encode(pTxt), true,false,false);
-  console.log('prototxt stored in FS');
-
-  // 2‑3 create net
+  const wData=new Uint8Array(await (await fetch(wUrl)).arrayBuffer());
+  cv.FS_createDataFile('/', 'pose.caffemodel', wData, true,false,false);
+  /* 2. prototxt を GitHub Pages から取得 */
+  const protoURL='https://ikchan-ikchan.github.io/.github.io/openpose_pose_coco.prototxt';
+  const pTxt=await (await fetch(protoURL)).text();
+  cv.FS_createDataFile('/', 'pose.prototxt', new TextEncoder().encode(pTxt), true,false,false);
+  /* 3. ネットワーク生成 */
   net=cv.readNetFromCaffe('pose.prototxt','pose.caffemodel');
   console.log('OpenPose network ready');
   await listCams();
 }
 
-/* =============== 3. start camera & loop =============== */
-startB.onclick = async ()=>{
-  if(!net){alert('OpenCV (DNN) not ready yet');return;}
-  await startCamera();
-  runLoop();
+/* カメラ起動 */
+startB.onclick=async ()=>{
+  if(!net){alert('OpenCV.js がまだ初期化されていません');return;}
+  await startCamera(); runLoop();
 };
-
 async function startCamera(){
-  if(vtag.srcObject){ vtag.srcObject.getTracks().forEach(t=>t.stop())}
-  /* determine max res */
+  if(vtag.srcObject) vtag.srcObject.getTracks().forEach(t=>t.stop());
   const tmp=await navigator.mediaDevices.getUserMedia({video:{deviceId:{exact:camSel.value}}});
-  const trk=tmp.getVideoTracks()[0],cap=trk.getCapabilities();
-  const maxW=cap.width?.max||640, maxH=cap.height?.max||480;
+  const cap=tmp.getVideoTracks()[0].getCapabilities();
+  const maxW=cap.width?.max||640,maxH=cap.height?.max||480;
   tmp.getTracks().forEach(t=>t.stop());
   maxInfo.textContent=`最大解像度: ${maxW}×${maxH}`;
-
   const scale=(parseInt(resInp.value)||100)/100;
-  const wantW=Math.floor(maxW*scale), wantH=Math.floor(maxH*scale);
+  const wantW=Math.floor(maxW*scale),wantH=Math.floor(maxH*scale);
   const fps=parseInt(fpsInp.value)||15;
-
   const stream=await navigator.mediaDevices.getUserMedia({
-      video:{deviceId:{exact:camSel.value},
-             width:{exact:wantW},height:{exact:wantH},
-             frameRate:{ideal:fps}}});
+        video:{deviceId:{exact:camSel.value},
+               width:{exact:wantW},height:{exact:wantH},
+               frameRate:{ideal:fps}}});
   vtag.srcObject=stream;
   await new Promise(r=>vtag.onloadedmetadata=r);
-  canvas.width=vtag.videoWidth; canvas.height=vtag.videoHeight;
+  canvas.width=vtag.videoWidth;canvas.height=vtag.videoHeight;
 }
 
-/* =============== 4. main processing loop =============== */
+/* ループ */
 function runLoop(){
-  const fps=parseInt(fpsInp.value)||15, intv=1000/fps;
-  const blobSize=new cv.Size(368,368);
+  const fps=parseInt(fpsInp.value)||15,intv=1000/fps,sz=new cv.Size(368,368);
   async function step(){
     if(vtag.paused||vtag.ended) return;
     ctx.drawImage(vtag,0,0,canvas.width,canvas.height);
     const src=cv.imread(canvas);
-    const blob=cv.blobFromImage(src,1/255,blobSize,new cv.Scalar(0,0,0),
-                                false,false);
-    net.setInput(blob);
-    const out=net.forward();            // [1,57,46,46] (COCO 18 pts + BG)
-    latest = extractKeypoints(out, canvas.width, canvas.height);
-    draw2d(latest);
-    src.delete(); blob.delete(); out.delete();
+    const blob=cv.blobFromImage(src,1/255,sz,new cv.Scalar(0,0,0),false,false);
+    net.setInput(blob); const out=net.forward();
+    latest=extract(out,canvas.width,canvas.height); draw2d(latest);
+    src.delete();blob.delete();out.delete();
     loopId=setTimeout(step,intv);
-  }
-  step();
+  } step();
 }
-
-/* -------------- 4‑a extract keypoints -------------- */
-function extractKeypoints(out, W,H){
-  const nPts=18, outH=out.size(2), outW=out.size(3);
-  const points=[];
-  for(let n=0;n<nPts;n++){
-    let maxVal=-1, maxX=0, maxY=0;
-    for(let y=0;y<outH;y++){
-      for(let x=0;x<outW;x++){
-        const val=out.floatAt(0,n,y,x);
-        if(val>maxVal){maxVal=val;maxX=x;maxY=y;}
-      }
+function extract(out,W,H){
+  const n=18,h=out.size(2),w=out.size(3),pts=[];
+  for(let i=0;i<n;i++){
+    let mv=-1,mx=0,my=0;
+    for(let y=0;y<h;y++)for(let x=0;x<w;x++){
+      const v=out.floatAt(0,i,y,x);
+      if(v>mv){mv=v;mx=x;my=y;}
     }
-    if(maxVal>0.1){
-      points.push({x:maxX/outW*W, y:maxY/outH*H, z:-maxVal*100});
-    }else points.push(null);
-  }
-  return points;
+    pts.push(mv>0.1?{x:mx/w*W,y:my/h*H,z:-mv*100}:null);
+  } return pts;
 }
-
-/* -------------- 4‑b draw 2‑D overlay -------------- */
 function draw2d(pts){
   ctx.strokeStyle='lime';ctx.lineWidth=2;
   const pairs=[[1,2],[1,5],[2,3],[3,4],[5,6],[6,7],[1,8],[8,9],[9,10],
                [1,11],[11,12],[12,13]];
-  pairs.forEach(([a,b])=>{
-    if(pts[a]&&pts[b]){
-      ctx.beginPath();ctx.moveTo(pts[a].x,pts[a].y);
-      ctx.lineTo(pts[b].x,pts[b].y);ctx.stroke();
-    }
-  });
+  pairs.forEach(([a,b])=>{if(pts[a]&&pts[b]){
+    ctx.beginPath();ctx.moveTo(pts[a].x,pts[a].y);
+    ctx.lineTo(pts[b].x,pts[b].y);ctx.stroke();}});
   ctx.fillStyle='red';
   pts.forEach(p=>{if(p){ctx.beginPath();ctx.arc(p.x,p.y,4,0,6.28);ctx.fill();}});
 }
 
-/* =============== 5. record – table & three.js =============== */
-capB.onclick = ()=>{
+/* 記録 */
+capB.onclick=()=>{
   clearTimeout(loopId);
-  if(!latest){alert('まだポーズが検出できていません');return;}
-  showTable(latest);
+  if(!latest){alert('検出結果がありません');return;}
+  coordDiv.innerHTML='<h3>座標</h3><table>'+latest.map((p,i)=>p?
+      `<tr><td>${i}</td><td>${p.x.toFixed(1)}</td><td>${p.y.toFixed(1)}</td><td>${p.z.toFixed(1)}</td></tr>`:'').join('')
+      +'</table>';
   draw3d(latest);
 };
 
-function showTable(pts){
-  let html='<h3>座標</h3><table><tr><th>#</th><th>x</th><th>y</th><th>z</th></tr>';
-  pts.forEach((p,i)=>{if(p)
-    html+=`<tr><td>${i}</td><td>${p.x.toFixed(1)}</td><td>${p.y.toFixed(1)}</td><td>${p.z.toFixed(1)}</td></tr>`});
-  coordDiv.innerHTML=html+'</table>';
-}
-
-/* -------------- Three.js -------------- */
+/* 3‑D 表示 */
 function draw3d(pts){
   threeDiv.innerHTML='';
   const scene=new THREE.Scene();
-  const cam=new THREE.PerspectiveCamera(75,threeDiv.clientWidth/threeDiv.clientHeight,0.1,1000);
-  const ren=new THREE.WebGLRenderer({antialias:true});
-  ren.setSize(threeDiv.clientWidth,threeDiv.clientHeight);
-  threeDiv.appendChild(ren.domElement);
-  const ctl=new THREE.OrbitControls(cam, ren.domElement);
+  const cam =new THREE.PerspectiveCamera(75,threeDiv.clientWidth/threeDiv.clientHeight,0.1,1000);
+  const ren =new THREE.WebGLRenderer({antialias:true});
+  ren.setSize(threeDiv.clientWidth,threeDiv.clientHeight);threeDiv.appendChild(ren.domElement);
+  const ctl=new THREE.OrbitControls(cam,ren.domElement);
   ctl.enableDamping=true;ctl.dampingFactor=0.1;
-
   scene.add(new THREE.AmbientLight(0xffffff,0.8));
-
-  /* grey ground */
-  const g=new THREE.PlaneGeometry(400,400);
-  const m=new THREE.MeshLambertMaterial({color:0x808080});
-  const ground=new THREE.Mesh(g,m); ground.rotation.x=-Math.PI/2; ground.position.y=-50;
-  scene.add(ground);
-
-  const geom=new THREE.SphereGeometry(2,16,16),
-        mat =new THREE.MeshBasicMaterial({color:0xff0000});
-  pts.forEach(p=>{
-    if(p){
-      const s=new THREE.Mesh(geom,mat);
-      s.position.set((p.x-canvas.width/2), -(p.y-canvas.height/2), p.z);
-      scene.add(s);
-    }
-  });
-
+  /* ground */
+  const plane=new THREE.Mesh(new THREE.PlaneGeometry(400,400),
+                             new THREE.MeshLambertMaterial({color:0x808080}));
+  plane.rotation.x=-Math.PI/2;plane.position.y=-50;scene.add(plane);
+  const geom=new THREE.SphereGeometry(2,16,16),mat=new THREE.MeshBasicMaterial({color:0xff0000});
+  pts.forEach(p=>{if(p){
+    const s=new THREE.Mesh(geom,mat);
+    s.position.set((p.x-canvas.width/2),-(p.y-canvas.height/2),p.z);
+    scene.add(s);
+  }});
   cam.position.set(0,0,200);
-  (function animate(){requestAnimationFrame(animate);ctl.update();ren.render(scene,cam);})();
+  (function ani(){requestAnimationFrame(ani);ctl.update();ren.render(scene,cam);})();
 }
 
-/* =============== bootstrap =============== */
+/* bootstrap */
 listCams();
 </script>
 </body>
