@@ -38,67 +38,73 @@
 <script src="https://unpkg.com/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 
 <script>
-const camSel=q('#cameraSelect'),fpsInp=q('#frameRate'),
-      resInp=q('#resPercent'),startB=q('#startBtn'),
-      capB=q('#captureBtn'),maxInfo=q('#maxResolutionInfo'),
-      vtag=q('#video'),canvas=q('#outputCanvas'),
-      ctx=canvas.getContext('2d'),coordDiv=q('#poseCoordinates'),
-      threeDiv=q('#threeContainer');
-let latest=null,loopId=null,net=null;
+/* ───────────── DOM shortcuts ───────────── */
+const camSel=q('#cameraSelect'), fpsInp=q('#frameRate'), resInp=q('#resPercent'),
+      startB=q('#startBtn'), capB=q('#captureBtn'), maxInfo=q('#maxResolutionInfo'),
+      vtag=q('#video'), canvas=q('#outputCanvas'), ctx=canvas.getContext('2d'),
+      coordDiv=q('#poseCoordinates'), threeDiv=q('#threeContainer');
+let latest=null, loopId=null, net=null;
 
 function q(s){return document.querySelector(s);}
+
+/* ───────────── Camera list ───────────── */
 async function listCams(){
   const devs=await navigator.mediaDevices.enumerateDevices();
   camSel.innerHTML='';
   devs.filter(d=>d.kind==='videoinput').forEach((d,i)=>{
     const o=document.createElement('option');
-    o.value=d.deviceId;o.text=d.label||`camera ${i+1}`;
+    o.value=d.deviceId; o.text=d.label||`camera ${i+1}`;
     camSel.appendChild(o);
   });
 }
 
+/* ───────────── OpenCV & network ───────────── */
 async function onOpenCvReady(){
-  /* 1. 重みを Dropbox からダウンロード */
-  const wUrl='https://www.dropbox.com/s/2h2bv29a130sgrk/pose_iter_440000.caffemodel?dl=1';
+  /* 1. weights – Dropbox 直 DL ドメイン (CORS OK) */
+  const wUrl='https://dl.dropboxusercontent.com/s/2h2bv29a130sgrk/pose_iter_440000.caffemodel';
   const wData=new Uint8Array(await (await fetch(wUrl)).arrayBuffer());
-  cv.FS_createDataFile('/', 'pose.caffemodel', wData, true,false,false);
-  /* 2. prototxt を GitHub Pages から取得 */
+  cv.FS_createDataFile('/','pose.caffemodel',wData,true,false,false);
+
+  /* 2. prototxt – GitHub Pages 上のファイル */
   const protoURL='https://ikchan-ikchan.github.io/.github.io/openpose_pose_coco.prototxt';
   const pTxt=await (await fetch(protoURL)).text();
-  cv.FS_createDataFile('/', 'pose.prototxt', new TextEncoder().encode(pTxt), true,false,false);
-  /* 3. ネットワーク生成 */
+  cv.FS_createDataFile('/','pose.prototxt',new TextEncoder().encode(pTxt),true,false,false);
+
+  /* 3. build network */
   net=cv.readNetFromCaffe('pose.prototxt','pose.caffemodel');
   console.log('OpenPose network ready');
   await listCams();
 }
 
-/* カメラ起動 */
+/* ───────────── Camera start ───────────── */
 startB.onclick=async ()=>{
   if(!net){alert('OpenCV.js がまだ初期化されていません');return;}
   await startCamera(); runLoop();
 };
+
 async function startCamera(){
   if(vtag.srcObject) vtag.srcObject.getTracks().forEach(t=>t.stop());
   const tmp=await navigator.mediaDevices.getUserMedia({video:{deviceId:{exact:camSel.value}}});
   const cap=tmp.getVideoTracks()[0].getCapabilities();
-  const maxW=cap.width?.max||640,maxH=cap.height?.max||480;
+  const maxW=cap.width?.max||640, maxH=cap.height?.max||480;
   tmp.getTracks().forEach(t=>t.stop());
   maxInfo.textContent=`最大解像度: ${maxW}×${maxH}`;
+
   const scale=(parseInt(resInp.value)||100)/100;
-  const wantW=Math.floor(maxW*scale),wantH=Math.floor(maxH*scale);
+  const wantW=Math.floor(maxW*scale), wantH=Math.floor(maxH*scale);
   const fps=parseInt(fpsInp.value)||15;
   const stream=await navigator.mediaDevices.getUserMedia({
-        video:{deviceId:{exact:camSel.value},
-               width:{exact:wantW},height:{exact:wantH},
-               frameRate:{ideal:fps}}});
+          video:{deviceId:{exact:camSel.value},
+                 width:{exact:wantW},height:{exact:wantH},
+                 frameRate:{ideal:fps}}});
   vtag.srcObject=stream;
   await new Promise(r=>vtag.onloadedmetadata=r);
-  canvas.width=vtag.videoWidth;canvas.height=vtag.videoHeight;
+  canvas.width=vtag.videoWidth; canvas.height=vtag.videoHeight;
 }
 
-/* ループ */
+/* ───────────── Processing loop ───────────── */
 function runLoop(){
-  const fps=parseInt(fpsInp.value)||15,intv=1000/fps,sz=new cv.Size(368,368);
+  const fps=parseInt(fpsInp.value)||15, intv=1000/fps, sz=new cv.Size(368,368);
   async function step(){
     if(vtag.paused||vtag.ended) return;
     ctx.drawImage(vtag,0,0,canvas.width,canvas.height);
@@ -106,10 +112,12 @@ function runLoop(){
     const blob=cv.blobFromImage(src,1/255,sz,new cv.Scalar(0,0,0),false,false);
     net.setInput(blob); const out=net.forward();
     latest=extract(out,canvas.width,canvas.height); draw2d(latest);
-    src.delete();blob.delete();out.delete();
+    src.delete(); blob.delete(); out.delete();
     loopId=setTimeout(step,intv);
   } step();
 }
+
+/* ── keypoint extraction ── */
 function extract(out,W,H){
   const n=18,h=out.size(2),w=out.size(3),pts=[];
   for(let i=0;i<n;i++){
@@ -119,8 +127,11 @@ function extract(out,W,H){
       if(v>mv){mv=v;mx=x;my=y;}
     }
     pts.push(mv>0.1?{x:mx/w*W,y:my/h*H,z:-mv*100}:null);
-  } return pts;
+  }
+  return pts;
 }
+
+/* ── 2‑D overlay ── */
 function draw2d(pts){
   ctx.strokeStyle='lime';ctx.lineWidth=2;
   const pairs=[[1,2],[1,5],[2,3],[3,4],[5,6],[6,7],[1,8],[8,9],[9,10],
@@ -132,33 +143,38 @@ function draw2d(pts){
   pts.forEach(p=>{if(p){ctx.beginPath();ctx.arc(p.x,p.y,4,0,6.28);ctx.fill();}});
 }
 
-/* 記録 */
+/* ───────────── Record (table & 3‑D) ───────────── */
 capB.onclick=()=>{
   clearTimeout(loopId);
   if(!latest){alert('検出結果がありません');return;}
   coordDiv.innerHTML='<h3>座標</h3><table>'+latest.map((p,i)=>p?
-      `<tr><td>${i}</td><td>${p.x.toFixed(1)}</td><td>${p.y.toFixed(1)}</td><td>${p.z.toFixed(1)}</td></tr>`:'').join('')
-      +'</table>';
+    `<tr><td>${i}</td><td>${p.x.toFixed(1)}</td><td>${p.y.toFixed(1)}</td><td>${p.z.toFixed(1)}</td></tr>`:'').join('')
+    +'</table>';
   draw3d(latest);
 };
 
-/* 3‑D 表示 */
+/* ───────────── Three.js viewer ───────────── */
 function draw3d(pts){
   threeDiv.innerHTML='';
   const scene=new THREE.Scene();
-  const cam =new THREE.PerspectiveCamera(75,threeDiv.clientWidth/threeDiv.clientHeight,0.1,1000);
-  const ren =new THREE.WebGLRenderer({antialias:true});
-  ren.setSize(threeDiv.clientWidth,threeDiv.clientHeight);threeDiv.appendChild(ren.domElement);
+  const cam=new THREE.PerspectiveCamera(75,threeDiv.clientWidth/threeDiv.clientHeight,0.1,1000);
+  const ren=new THREE.WebGLRenderer({antialias:true});
+  ren.setSize(threeDiv.clientWidth,threeDiv.clientHeight); threeDiv.appendChild(ren.domElement);
   const ctl=new THREE.OrbitControls(cam,ren.domElement);
-  ctl.enableDamping=true;ctl.dampingFactor=0.1;
+  ctl.enableDamping=true; ctl.dampingFactor=0.1;
+
   scene.add(new THREE.AmbientLight(0xffffff,0.8));
+
   /* ground */
-  const plane=new THREE.Mesh(new THREE.PlaneGeometry(400,400),
-                             new THREE.MeshLambertMaterial({color:0x808080}));
-  plane.rotation.x=-Math.PI/2;plane.position.y=-50;scene.add(plane);
-  const geom=new THREE.SphereGeometry(2,16,16),mat=new THREE.MeshBasicMaterial({color:0xff0000});
+  const ground=new THREE.Mesh(
+      new THREE.PlaneGeometry(400,400),
+      new THREE.MeshLambertMaterial({color:0x808080}));
+  ground.rotation.x=-Math.PI/2; ground.position.y=-50; scene.add(ground);
+
+  const g=new THREE.SphereGeometry(2,16,16),
+        m=new THREE.MeshBasicMaterial({color:0xff0000});
   pts.forEach(p=>{if(p){
-    const s=new THREE.Mesh(geom,mat);
+    const s=new THREE.Mesh(g,m);
     s.position.set((p.x-canvas.width/2),-(p.y-canvas.height/2),p.z);
     scene.add(s);
   }});
@@ -166,7 +182,7 @@ function draw3d(pts){
   (function ani(){requestAnimationFrame(ani);ctl.update();ren.render(scene,cam);})();
 }
 
-/* bootstrap */
+/* ───────────── bootstrap ───────────── */
 listCams();
 </script>
 </body>
