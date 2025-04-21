@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<title>OpenCV.js + OpenPose デモ</title>
+<title>OpenCV.js + OpenPose COCO デモ</title>
 <style>
  body{font-family:sans-serif;text-align:center}
  video,canvas{display:block;margin:10px auto}
@@ -14,7 +14,7 @@
 </style>
 </head>
 <body>
-<h2>OpenCV.js + OpenPose COCO （モデル手動ロード）</h2>
+<h2>OpenCV.js + OpenPose COCO（モデル手動ロード）</h2>
 
 <div id="controls">
   <label>カメラ:</label><select id="cameraSelect"></select>&nbsp;
@@ -26,179 +26,158 @@
 </div>
 
 <video id="video" autoplay muted playsinline style="display:none"></video>
-<canvas id="canvas" ></canvas>
+<canvas id="canvas"></canvas>
 <div id="poseCoordinates"></div>
 <div id="threeContainer"></div>
 
-<!-- OpenCV.js (DNN 含むビルド) -->
+<!-- ***** スクリプトは HTML 要素の後に配置 ***** -->
+<!-- OpenCV.js（DNN 含むビルド） -->
 <script src="https://docs.opencv.org/4.x/opencv.js" async onload="onOpenCvReady()"></script>
-<!-- Three.js & OrbitControls（点群を回せるように）-->
+<!-- Three.js & OrbitControls -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://unpkg.com/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 
 <script>
-/* ---------- 定数 ---------- */
-const PROTOTXT_PATH = 'models/pose_deploy_linevec.prototxt';      // GitHub Pages に置いた prototxt
-const CAFFEMODEL_URL = 'https://www.dropbox.com/s/2h2bv29a130sgrk/pose_iter_440000.caffemodel?dl=1'; // Dropbox 重み
+/* ===== 定数 ===== */
+const PROTOTXT_PATH   = 'models/pose_deploy_linevec.prototxt';        // リポジトリ内
+const CAFFEMODEL_URL  = 'https://cdn.jsdelivr.net/gh/CMU-Perceptual-Computing-Lab/openpose_models@master/pose/coco/pose_iter_440000.caffemodel'; // CORS 可
 const PAIRS = [[1,2],[1,5],[2,3],[3,4],[5,6],[6,7],[1,8],[8,9],[9,10],
                [1,11],[11,12],[12,13],[0,1],[0,14],[14,16],[0,15],[15,17]];
-/* ---------- 変数 ---------- */
-let net=null, cap=null, rafId=null;
-let latestLandmarks=null, threeScene=null;
-/* ---------- UI 要素 ---------- */
-const camSel = document.getElementById('cameraSelect');
-const fpsInp = document.getElementById('fps');
-const resPerInp = document.getElementById('resPer');
-const startBtn = document.getElementById('startBtn');
-const loadBtn  = document.getElementById('loadBtn');
-const maxInfo  = document.getElementById('maxResolutionInfo');
-const coordDiv = document.getElementById('poseCoordinates');
-const threeDiv = document.getElementById('threeContainer');
-const videoEl  = document.getElementById('video');
-const canvas   = document.getElementById('canvas');
-const ctx      = canvas.getContext('2d');
+/* ===== UI 要素 ===== */
+const camSel=document.getElementById('cameraSelect');
+const fpsInp=document.getElementById('fps');
+const resInp=document.getElementById('resPer');
+const startBtn=document.getElementById('startBtn');
+const loadBtn=document.getElementById('loadBtn');
+const maxInfo=document.getElementById('maxResolutionInfo');
+const coordDiv=document.getElementById('poseCoordinates');
+const threeDiv=document.getElementById('threeContainer');
+const video=document.getElementById('video');
+const canvas=document.getElementById('canvas');
+const ctx=canvas.getContext('2d');
 
-/* ---------- OpenCV 初期化 ---------- */
-function onOpenCvReady(){
-  console.log('OpenCV.js ready');
-  enumerateCameras();
-}
+/* ===== 変数 ===== */
+let net=null, cap=null, rafId=null, latestPts=null;
 
-/* ---------- カメラ列挙 ---------- */
+/* ===== OpenCV Ready ===== */
+function onOpenCvReady(){ console.log('OpenCV.js ready'); enumerateCameras(); }
+
+/* ===== カメラ列挙 ===== */
 async function enumerateCameras(){
-  const devs = await navigator.mediaDevices.enumerateDevices();
+  const devs=await navigator.mediaDevices.enumerateDevices();
   camSel.innerHTML='';
   devs.filter(d=>d.kind==='videoinput').forEach((d,i)=>{
-    const opt=document.createElement('option');
-    opt.value=d.deviceId; opt.text=d.label||`camera${i+1}`;
-    camSel.appendChild(opt);
+    const o=document.createElement('option');
+    o.value=d.deviceId; o.text=d.label||`camera${i+1}`; camSel.appendChild(o);
   });
 }
-/* ---------- モデル読込 ---------- */
-loadBtn.onclick = async () =>{
+
+/* ===== モデル読み込み ===== */
+loadBtn.onclick=async()=>{
   if(net){alert('既に読み込み済み');return;}
-  loadBtn.disabled=true; loadBtn.textContent='ダウンロード中…';
-  // prototxt は相対パスで fetch
-  const protoTxt = await (await fetch(PROTOTXT_PATH)).text();
-  // caffemodel を ArrayBuffer で DL
-  const caffebin = await (await fetch(CAFFEMODEL_URL)).arrayBuffer();
-  // OpenCV FS に書き込む
-  cv.FS_createDataFile('/', 'pose.prototxt',  protoTxt, true, false, false);
-  cv.FS_createDataFile('/', 'pose.caffemodel', new Uint8Array(caffebin), true, false, false);
-  net = cv.readNetFromCaffe('pose.prototxt','pose.caffemodel');
-  loadBtn.textContent='モデル OK';
-  console.log('model loaded');
+  try{
+    loadBtn.disabled=true; loadBtn.textContent='DL中…';
+    /* prototxt */
+    const protoTxtStr=await (await fetch(PROTOTXT_PATH)).text();
+    const protoArr =new TextEncoder().encode(protoTxtStr);
+    cv.FS_createDataFile('/','pose.prototxt',protoArr,true,false,false);
+    /* caffemodel */
+    const cafArr=new Uint8Array(await (await fetch(CAFFEMODEL_URL)).arrayBuffer());
+    cv.FS_createDataFile('/','pose.caffemodel',cafArr,true,false,false);
+    net=cv.readNetFromCaffe('pose.prototxt','pose.caffemodel');
+    loadBtn.textContent='モデル OK';
+    console.log('Model loaded');
+  }catch(e){
+    console.error(e);
+    loadBtn.disabled=false; loadBtn.textContent='モデル読込';
+    alert('モデルの取得に失敗しました');
+  }
 };
 
-/* ---------- カメラ開始 ---------- */
-startBtn.onclick = async ()=>{
+/* ===== カメラ開始 ===== */
+startBtn.onclick=async()=>{
   if(!net){alert('先に「モデル読込」を押してください');return;}
   if(rafId) cancelAnimationFrame(rafId);
   await startCamera();
-  cap = new cv.VideoCapture(videoEl);
+  cap=new cv.VideoCapture(video);
   processFrame();
 };
-/* startCamera */
+
 async function startCamera(){
-  const id=camSel.value, fps=+fpsInp.value, per=+resPerInp.value;
-  // まず capabilities を知る
-  const s=await navigator.mediaDevices.getUserMedia({video:{deviceId:{exact:id}}});
-  const t=s.getVideoTracks()[0], capab=t.getCapabilities();
-  const w=maxVal(capab.width,640), h=maxVal(capab.height,480);
-  maxInfo.textContent=`最大: ${w}×${h}`;
-  s.getTracks().forEach(tr=>tr.stop());
-  const wid=Math.floor(w*per/100), hei=Math.floor(h*per/100);
-  const stream = await navigator.mediaDevices.getUserMedia({
-    video:{deviceId:{exact:id}, width:{exact:wid}, height:{exact:hei}, frameRate:{ideal:fps}}
+  const id=camSel.value, fps=+fpsInp.value, per=+resInp.value;
+  /* capabilities 取得 */
+  const tmp=await navigator.mediaDevices.getUserMedia({video:{deviceId:{exact:id}}});
+  const tr=tmp.getVideoTracks()[0], capab=tr.getCapabilities();
+  const maxW=capab.width?.max||640, maxH=capab.height?.max||480;
+  maxInfo.textContent=`最大: ${maxW}×${maxH}`; tmp.getTracks().forEach(t=>t.stop());
+  const w=Math.floor(maxW*per/100), h=Math.floor(maxH*per/100);
+  const stream=await navigator.mediaDevices.getUserMedia({
+    video:{deviceId:{exact:id},width:{exact:w},height:{exact:h},frameRate:{ideal:fps}}
   });
-  videoEl.srcObject=stream;
-  await videoEl.play();
-  canvas.width=videoEl.videoWidth; canvas.height=videoEl.videoHeight;
+  video.srcObject=stream; await video.play();
+  canvas.width=video.videoWidth; canvas.height=video.videoHeight;
 }
-function maxVal(obj,def){return obj&&obj.max?obj.max:def;}
-/* ---------- フレーム処理 ---------- */
+
+/* ===== フレーム処理 ===== */
 function processFrame(){
-  const mat = new cv.Mat(videoEl.videoHeight, videoEl.videoWidth, cv.CV_8UC4);
+  const mat = new cv.Mat(video.videoHeight,video.videoWidth,cv.CV_8UC4);
   cap.read(mat);
-  const inp = cv.blobFromImage(mat,1/255,new cv.Size(368,368),new cv.Scalar(0,0,0),false,false);
-  net.setInput(inp);
-  const out = net.forward();    // shape: [1,57,46,46] (18p+BG heatmaps, 19*2 PAF)
-  const H=out.size(2), W=out.size(3);
+  const blob=cv.blobFromImage(mat,1/255,new cv.Size(368,368),new cv.Scalar(),false,false);
+  net.setInput(blob);
+  const out=net.forward(); const H=out.size(2),W=out.size(3);
   const pts=[];
-  for(let i=0;i<18;i++){          // 18 keypoints
-    const hm = out.ptr(0,i);
-    let max=0, px=0, py=0;
-    for(let y=0;y<H;y++){
-      for(let x=0;x<W;x++){
-        const v=hm[y*W+x];
-        if(v>max){max=v;px=x;py=y;}
-      }
+  for(let i=0;i<18;i++){
+    const hm=out.ptr(0,i); let mx=0,px=0,py=0;
+    for(let y=0;y<H;y++) for(let x=0;x<W;x++){
+      const v=hm[y*W+x]; if(v>mx){mx=v;px=x;py=y;}
     }
-    if(max>0.1){
-      pts[i]={
-        x: (videoEl.videoWidth*px/W),
-        y: (videoEl.videoHeight*py/H),
-        z: 0
-      };
-    }else pts[i]=null;
+    pts[i]=mx>0.1?{x:video.videoWidth*px/W,y:video.videoHeight*py/H}:null;
   }
-  latestLandmarks=pts;
-  // 描画
-  ctx.drawImage(videoEl,0,0,canvas.width,canvas.height);
-  ctx.strokeStyle='lime'; ctx.lineWidth=2;
-  PAIRS.forEach(p=>{
-    if(pts[p[0]]&&pts[p[1]]){
-      ctx.beginPath();
-      ctx.moveTo(pts[p[0]].x,pts[p[0]].y);
-      ctx.lineTo(pts[p[1]].x,pts[p[1]].y);
-      ctx.stroke();
-    }
-  });
+  latestPts=pts;
+  /* 描画 */
+  ctx.drawImage(video,0,0,canvas.width,canvas.height);
+  ctx.strokeStyle='lime';ctx.lineWidth=2;
+  PAIRS.forEach(p=>{if(pts[p[0]]&&pts[p[1]]){
+    ctx.beginPath();ctx.moveTo(pts[p[0]].x,pts[p[0]].y);
+    ctx.lineTo(pts[p[1]].x,pts[p[1]].y);ctx.stroke();}});
   ctx.fillStyle='red';
-  pts.forEach(pt=>{if(pt){ctx.beginPath();ctx.arc(pt.x,pt.y,4,0,6.28);ctx.fill();}});
-  mat.delete(); inp.delete(); out.delete();
+  pts.forEach(p=>{if(p){ctx.beginPath();ctx.arc(p.x,p.y,4,0,6.28);ctx.fill();}});
+  mat.delete();blob.delete();out.delete();
   rafId=requestAnimationFrame(processFrame);
 }
-/* ---------- 記録 → 座標表 & 3D ---------- */
+
+/* ===== 記録 ===== */
+document.getElementById('controls').insertAdjacentHTML('beforeend',
+  '<button id="captureButton">記録</button>');
+const captureButton=document.getElementById('captureButton');
+
 captureButton.onclick=()=>{
-  if(!latestLandmarks){alert('まだポーズが検出されていません');return;}
+  if(!latestPts){alert('まだ検出されていません');return;}
   cancelAnimationFrame(rafId);
-  // 表
-  let html='<h3>現在の座標 (x,y)</h3><table><tr><th>idx</th><th>x</th><th>y</th></tr>';
-  latestLandmarks.forEach((p,i)=>{
-    html+=`<tr><td>${i}</td><td>${p?p.x.toFixed(1):'-'}</td><td>${p?p.y.toFixed(1):'-'}</td></tr>`;
-  });
-  html+='</table>'; coordDiv.innerHTML=html;
-  draw3D(latestLandmarks);
+  /* 表 */
+  let html='<h3>座標 (x,y)</h3><table><tr><th>id</th><th>x</th><th>y</th></tr>';
+  latestPts.forEach((p,i)=>html+=`<tr><td>${i}</td><td>${p?p.x.toFixed(1):'-'}</td><td>${p?p.y.toFixed(1):'-'}</td></tr>`);
+  coordDiv.innerHTML=html+'</table>';
+  draw3D(latestPts);
 };
-/* ---------- Three.js で点群＋地面 ---------- */
+
+/* ===== Three.js 点群 + 地面 ===== */
 function draw3D(pts){
   threeDiv.innerHTML='';
   const scene=new THREE.Scene();
-  const cam  =new THREE.PerspectiveCamera(60,threeDiv.clientWidth/threeDiv.clientHeight,0.1,1000);
-  const rend =new THREE.WebGLRenderer({antialias:true});
-  rend.setSize(threeDiv.clientWidth,threeDiv.clientHeight);
-  threeDiv.appendChild(rend.domElement);
-  const ctl  =new THREE.OrbitControls(cam,rend.domElement);
+  const cam=new THREE.PerspectiveCamera(60,threeDiv.clientWidth/threeDiv.clientHeight,.1,1000);
+  const rend=new THREE.WebGLRenderer({antialias:true});
+  rend.setSize(threeDiv.clientWidth,threeDiv.clientHeight); threeDiv.appendChild(rend.domElement);
+  const ctl=new THREE.OrbitControls(cam,rend.domElement);
   ctl.enableDamping=true; ctl.dampingFactor=.1;
-
   scene.add(new THREE.AmbientLight(0xffffff,.8));
-
-  // 地面
-  const gnd=new THREE.Mesh(new THREE.PlaneGeometry(400,400),
-                           new THREE.MeshLambertMaterial({color:0x808080}));
-  gnd.rotation.x=-Math.PI/2; gnd.position.y=-50; scene.add(gnd);
-
-  // 点
-  const geom=new THREE.SphereGeometry(2,16,16);
-  const mat =new THREE.MeshBasicMaterial({color:0xff0000});
-  pts.forEach(p=>{
-    if(p){
-      const s=new THREE.Mesh(geom,mat);
-      s.position.set((p.x-canvas.width/2), -(p.y-canvas.height/2), 0);
-      scene.add(s);
-    }
-  });
+  /* 地面 */
+  const plane=new THREE.Mesh(new THREE.PlaneGeometry(400,400),new THREE.MeshLambertMaterial({color:0x808080}));
+  plane.rotation.x=-Math.PI/2; plane.position.y=-50; scene.add(plane);
+  /* 点 */
+  const g=new THREE.SphereGeometry(2,16,16), m=new THREE.MeshBasicMaterial({color:0xff0000});
+  pts.forEach(p=>{if(p){const s=new THREE.Mesh(g,m);
+    s.position.set(p.x-canvas.width/2, -(p.y-canvas.height/2),0); scene.add(s);}});
   cam.position.set(0,0,150);
   (function loop(){requestAnimationFrame(loop); ctl.update(); rend.render(scene,cam);})();
 }
