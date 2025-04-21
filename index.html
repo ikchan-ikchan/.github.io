@@ -2,168 +2,128 @@
 <html>
   <head>
     <meta charset="UTF-8">
-    <title>BodyPix による体表面検出 + Pose3D</title>
+    <title>BodyPix による人物セグメンテーションデモ</title>
     <style>
       body { font-family: sans-serif; text-align: center; }
       video, canvas { display: block; margin: 10px auto; }
       #controls { margin: 10px; }
-      #maxResolutionInfo, #poseCoordinates { font-size:0.9em; color:#555; }
-      table { margin:auto; border-collapse:collapse; }
-      th,td { border:1px solid #aaa; padding:4px; }
-      #plotly3d { width:640px; height:300px; margin:10px auto; }
+      #maxResolutionInfo, #segmentationInfo { margin-top: 5px; font-size: 0.9em; color: #555; }
     </style>
   </head>
   <body>
-    <h2>BodyPix セグメンテーション + MediaPipe Pose3D Plotly</h2>
+    <h2>BodyPix 体セグメンテーション デモ</h2>
     <div id="controls">
-      <label>カメラ:</label>
+      <label for="cameraSelect">カメラ選択:</label>
       <select id="cameraSelect"></select>
-      &nbsp;
-      <label>fps:</label>
-      <input id="frameRateInput" type="number" min="1" value="15" style="width:60px;">
-      &nbsp;
-      <label>解像度%:</label>
-      <input id="resPercentInput" type="number" min="1" max="100" value="100" style="width:60px;">
-      &nbsp;
+      &nbsp;&nbsp;
+      <label for="frameRateInput">fps:</label>
+      <input type="number" id="frameRateInput" min="1" value="15" style="width:60px;">
+      &nbsp;&nbsp;
+      <label for="resPercentInput">解像度%:</label>
+      <input type="number" id="resPercentInput" min="1" max="100" value="100" style="width:60px;">
+      &nbsp;&nbsp;
       <button id="startButton">開始</button>
-      &nbsp;
+      &nbsp;&nbsp;
       <button id="captureButton">記録</button>
       <div id="maxResolutionInfo"></div>
+      <div id="segmentationInfo"></div>
     </div>
 
-    <!-- 内部用 video -->
+    <!-- 内部用 video と描画用 canvas -->
     <video id="video" autoplay muted playsinline style="display:none;"></video>
-    <!-- 描画用 canvas -->
     <canvas id="outputCanvas"></canvas>
 
-    <!-- 座標テーブル -->
-    <div id="poseCoordinates"></div>
-    <!-- 3Dプロット -->
-    <div id="plotly3d"></div>
-
     <!-- ライブラリ読み込み -->
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.21.0/dist/tf.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/body-pix@2.2.0/dist/body-pix.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
-    <script src="https://cdn.plot.ly/plotly-2.24.1.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/body-pix"></script>
 
     <script>
-    const video = document.getElementById('video');
-    const canvas = document.getElementById('outputCanvas');
-    const ctx = canvas.getContext('2d');
-    const camSel = document.getElementById('cameraSelect');
-    const fpsInput = document.getElementById('frameRateInput');
-    const resInput = document.getElementById('resPercentInput');
-    const startBtn = document.getElementById('startButton');
-    const capBtn = document.getElementById('captureButton');
-    const infoDiv = document.getElementById('maxResolutionInfo');
-    const coordDiv = document.getElementById('poseCoordinates');
+      const video = document.getElementById('video');
+      const canvas = document.getElementById('outputCanvas');
+      const ctx = canvas.getContext('2d');
+      const cameraSelect = document.getElementById('cameraSelect');
+      const frameRateInput = document.getElementById('frameRateInput');
+      const resPercentInput = document.getElementById('resPercentInput');
+      const startButton = document.getElementById('startButton');
+      const captureButton = document.getElementById('captureButton');
+      const maxResolutionInfo = document.getElementById('maxResolutionInfo');
+      const segmentationInfo = document.getElementById('segmentationInfo');
 
-    let bodyPixNet, poseNet, latestPose=null, loopId;
+      let bodyPixModel = null;
+      let processingLoopId = null;
 
-    // カメラ列挙
-    async function enumCam(){
-      const devs = await navigator.mediaDevices.enumerateDevices();
-      devs.filter(d=>d.kind==='videoinput')
-          .forEach((d,i)=> {
-            camSel.innerHTML+=`<option value="${d.deviceId}">${d.label||'カメラ'+(i+1)}</option>`;
-          });
-    }
-
-    // BodyPix＆Pose 初期化
-    async function loadModels(){
-      bodyPixNet = await bodyPix.load();
-      poseNet = new Pose({ locateFile:f=>`https://cdn.jsdelivr.net/npm/@mediapipe/pose/${f}` });
-      poseNet.setOptions({
-        modelComplexity:1,
-        smoothLandmarks:true,
-        minDetectionConfidence:0.5,
-        minTrackingConfidence:0.5
-      });
-      poseNet.onResults(r=>{ latestPose=r; });
-    }
-
-    // カメラ開始
-    async function startCam(){
-      const devId = camSel.value;
-      // 一度キャプ能力調査
-      let ts = await navigator.mediaDevices.getUserMedia({video:{deviceId:devId}});
-      let cap = ts.getVideoTracks()[0].getCapabilities();
-      const maxW = cap.width?.max||640, maxH=cap.height?.max||480;
-      infoDiv.innerText=`最大解像度: ${maxW}×${maxH}`;
-      ts.getTracks().forEach(t=>t.stop());
-
-      const p = parseInt(resInput.value)||100;
-      const w = Math.floor(maxW*p/100), h=Math.floor(maxH*p/100);
-      const fps = parseInt(fpsInput.value)||15;
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video:{ deviceId:devId, width:{exact:w}, height:{exact:h}, frameRate:{ideal:fps} }
-      });
-      video.srcObject=stream;
-      await new Promise(r=>video.onloadedmetadata=r);
-      canvas.width=video.videoWidth; canvas.height=video.videoHeight;
-      video.play();
-    }
-
-    // メインループ
-    async function loop(){
-      const fps = parseInt(fpsInput.value)||15;
-      const interval = 1000/fps;
-      // BodyPix segmentation
-      const seg = await bodyPixNet.segmentPerson(video, {internalResolution:'medium'});
-      // マスク描画
-      const mask = bodyPix.toMask(seg, {r:128,g:128,b:128,a:160}, {r:0,g:0,b:0,a:0});
-      ctx.putImageData(mask,0,0);
-      // その上に動画を半透明で重ね（背景残す）
-      ctx.globalCompositeOperation='source-in';
-      ctx.drawImage(video,0,0);
-      ctx.globalCompositeOperation='destination-over';
-      ctx.drawImage(video,0,0);
-      ctx.globalCompositeOperation='source-over';
-      // Pose 実行
-      await poseNet.send({image:video});
-      // ランドマーク重ね
-      if(latestPose?.poseLandmarks){
-        drawConnectors(ctx,latestPose.poseLandmarks,Pose.POSE_CONNECTIONS,{color:'lime',lineWidth:2});
-        drawLandmarks(ctx,latestPose.poseLandmarks,{color:'red',lineWidth:1});
+      // カメラ列挙
+      async function enumerateCameras() {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        devices.filter(d => d.kind === 'videoinput')
+               .forEach((d,i) => {
+                 cameraSelect.innerHTML += 
+                   `<option value="${d.deviceId}">${d.label||'カメラ '+(i+1)}</option>`;
+               });
       }
-      loopId = setTimeout(loop,interval);
-    }
 
-    // 記録＆3Dプロット
-    capBtn.onclick = ()=>{
-      clearTimeout(loopId);
-      if(!latestPose?.poseLandmarks){
-        coordDiv.innerHTML='<p>検出なし</p>';
-        Plotly.purge('plotly3d'); return;
+      // カメラ開始
+      async function startCamera() {
+        // まず最低制約で取得して capabilities 調査
+        const deviceId = cameraSelect.value;
+        let temp = await navigator.mediaDevices.getUserMedia({ video:{ deviceId } });
+        const track = temp.getVideoTracks()[0];
+        const caps = track.getCapabilities();
+        const maxW = caps.width?.max||640, maxH = caps.height?.max||480;
+        maxResolutionInfo.innerText = `最大解像度: ${maxW}×${maxH}`;
+        temp.getTracks().forEach(t=>t.stop());
+
+        // ユーザー指定 %
+        const p = parseInt(resPercentInput.value)||100;
+        const w = Math.floor(maxW*p/100), h = Math.floor(maxH*p/100);
+        const fps = parseInt(frameRateInput.value)||15;
+
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video:{ deviceId, width:{exact:w}, height:{exact:h}, frameRate:{ideal:fps} }
+        });
+        video.srcObject = stream;
+        await new Promise(r=>video.onloadedmetadata=r);
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
       }
-      // テーブル
-      const lm = latestPose.poseLandmarks;
-      let html='<h3>座標 (x,y,z)</h3><table><tr><th>i</th><th>x</th><th>y</th><th>z</th></tr>';
-      lm.forEach((p,i)=> html+=
-        `<tr><td>${i}</td><td>${p.x.toFixed(3)}</td><td>${p.y.toFixed(3)}</td><td>${p.z.toFixed(3)}</td></tr>`
-      );
-      coordDiv.innerHTML=html+'</table>';
-      // 3D散布図
-      const xs=lm.map(p=>(p.x-0.5)*100),
-            ys=lm.map(p=>(0.5-p.y)*100),
-            zs=lm.map(p=>p.z*100);
-      Plotly.newPlot('plotly3d',[{
-        x:xs,y:ys,z:zs,mode:'markers',type:'scatter3d',
-        marker:{size:4,color:'red'}
-      }],{margin:{l:0,r:0,b:0,t:0},
-         scene:{xaxis:{title:'X'}, yaxis:{title:'Y'}, zaxis:{title:'Z'}}});
-    };
 
-    // 開始ボタン
-    startBtn.onclick = async ()=>{
-      await loadModels();
-      await startCam();
-      loop();
-    };
+      // ループ表示（リアルタイムプレビュー）
+      function processLoop() {
+        ctx.drawImage(video, 0,0, canvas.width, canvas.height);
+        processingLoopId = requestAnimationFrame(processLoop);
+      }
 
-    enumCam();
+      // 記録時のセグメンテーション
+      async function captureSegmentation() {
+        cancelAnimationFrame(processingLoopId);
+        if (!bodyPixModel) {
+          segmentationInfo.innerText = 'モデル読み込み中…';
+          bodyPixModel = await bodyPix.load();
+          segmentationInfo.innerText = '';
+        }
+        // セグメント実行
+        const segmentation = await bodyPixModel.segmentPerson(video, {
+          internalResolution: 'medium',
+          segmentationThreshold: 0.7
+        });
+        // マスク生成＆描画
+        const mask = bodyPix.toMask(
+          segmentation,
+          {r:0, g:0, b:0, a:0},
+          {r:128, g:128, b:128, a:128}
+        );
+        ctx.putImageData(mask, 0,0);
+        segmentationInfo.innerText = '記録完了：灰色でマスク表示';
+      }
+
+      // イベントバインド
+      startButton.onclick = async () => {
+        await startCamera();
+        processLoop();
+      };
+      captureButton.onclick = captureSegmentation;
+
+      enumerateCameras();
     </script>
   </body>
 </html>
