@@ -2,170 +2,134 @@
 <html>
   <head>
     <meta charset="UTF-8">
-    <title>MediaPipe Pose + Plotly.js 3D骨格プロット デモ</title>
+    <title>Pose + Segmentation デモ</title>
     <style>
       body { font-family: sans-serif; text-align: center; }
       video, canvas { display: block; margin: 10px auto; }
       #controls { margin: 10px; }
-      #maxResolutionInfo, #poseCoordinates { margin-top: 5px; font-size: 0.9em; color: #555; }
-      table { margin: auto; border-collapse: collapse; }
-      table, th, td { border: 1px solid #aaa; padding: 4px; }
-      #plotly3d { width: 640px; height: 300px; margin: 10px auto; }
+      #maxResolutionInfo { font-size:0.9em; color:#555; }
     </style>
   </head>
   <body>
-    <h2>MediaPipe Pose: ボーン付き3D散布図 (Plotly.js)</h2>
+    <h2>MediaPipe Pose ＋ Selfie Segmentation デモ</h2>
     <div id="controls">
-      <label>カメラ:</label>
-      <select id="cameraSelect"></select>
-      &nbsp;
-      <label>fps:</label>
-      <input type="number" id="frameRateInput" min="1" value="15" style="width:60px;">
-      &nbsp;
-      <label>解像度%:</label>
-      <input type="number" id="resPercentInput" min="1" max="100" value="100" style="width:60px;">
-      &nbsp;
+      <label>カメラ:
+        <select id="cameraSelect"></select>
+      </label>
+      <label>fps:
+        <input type="number" id="frameRateInput" value="15" style="width:60px;">
+      </label>
+      <label>解像度%:
+        <input type="number" id="resPercentInput" value="100" style="width:60px;">
+      </label>
       <button id="startButton">開始</button>
-      <button id="captureButton">記録</button>
       <div id="maxResolutionInfo"></div>
     </div>
 
     <video id="video" autoplay muted playsinline style="display:none;"></video>
+    <!-- このキャンバスに：①動画、②マスク、③Pose描画 を重ねます -->
     <canvas id="outputCanvas"></canvas>
-    <div id="poseCoordinates"></div>
-    <div id="plotly3d"></div>
 
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/selfie_segmentation.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
-    <script src="https://cdn.plot.ly/plotly-2.24.1.min.js"></script>
 
     <script>
-      const video = document.getElementById('video');
-      const canvas = document.getElementById('outputCanvas');
-      const ctx = canvas.getContext('2d');
-      const cameraSelect = document.getElementById('cameraSelect');
-      const frameRateInput = document.getElementById('frameRateInput');
-      const resPercentInput = document.getElementById('resPercentInput');
-      const startButton = document.getElementById('startButton');
-      const captureButton = document.getElementById('captureButton');
-      const maxResolutionInfo = document.getElementById('maxResolutionInfo');
-      const poseCoordinatesDiv = document.getElementById('poseCoordinates');
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('outputCanvas');
+    const ctx = canvas.getContext('2d');
+    const camSelect = document.getElementById('cameraSelect');
+    const fpsInput = document.getElementById('frameRateInput');
+    const resInput = document.getElementById('resPercentInput');
+    const startBtn = document.getElementById('startButton');
+    const maxInfo = document.getElementById('maxResolutionInfo');
 
-      let pose, processingLoopId, latestResults = null;
+    let pose, seg, loopId;
 
-      // 1. カメラ列挙
-      async function enumerateCameras() {
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        devices.filter(d=>d.kind==='videoinput').forEach((d,i)=>{
-          cameraSelect.innerHTML += `<option value="${d.deviceId}">${d.label||'カメラ '+(i+1)}</option>`;
-        });
+    // カメラ列挙
+    navigator.mediaDevices.enumerateDevices().then(devs=>{
+      devs.filter(d=>d.kind==='videoinput')
+          .forEach((d,i)=> camSelect.innerHTML+=
+            `<option value="${d.deviceId}">${d.label||'カメラ'+(i+1)}</option>`
+          );
+    });
+
+    // Pose 初期化
+    function initPose(){
+      pose = new Pose({ locateFile: f=>`https://cdn.jsdelivr.net/npm/@mediapipe/pose/${f}` });
+      pose.setOptions({ modelComplexity:1, smoothLandmarks:true, minDetectionConfidence:0.5 });
+      pose.onResults(onResults);
+    }
+    // Segmentation 初期化
+    function initSeg(){
+      seg = new SelfieSegmentation({ locateFile: f=>`https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${f}` });
+      seg.setOptions({ modelSelection:1 });
+      seg.onResults(onResults);
+    }
+
+    // 両方の結果を同じコールバックで受ける
+    function onResults(results){
+      // 1) マスクを動画の上に
+      ctx.save();
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+      ctx.drawImage(video,0,0,canvas.width,canvas.height);
+      if(results.segmentationMask){
+        ctx.globalCompositeOperation = 'source-atop';
+        ctx.fillStyle = 'rgba(128,128,128,0.5)';
+        ctx.drawImage(
+          results.segmentationMask, 0, 0,
+          canvas.width, canvas.height
+        );
+        ctx.fillRect(0,0,canvas.width,canvas.height);
+        ctx.globalCompositeOperation = 'source-over';
       }
-
-      // 2. MediaPipe Pose 初期化
-      function initializePose() {
-        pose = new Pose({ locateFile: f=>`https://cdn.jsdelivr.net/npm/@mediapipe/pose/${f}` });
-        pose.setOptions({
-          modelComplexity:1, smoothLandmarks:true,
-          minDetectionConfidence:0.5, minTrackingConfidence:0.5
-        });
-        pose.onResults(results=>{
-          latestResults = results;
-          ctx.save();
-          ctx.clearRect(0,0,canvas.width,canvas.height);
-          ctx.drawImage(results.image,0,0,canvas.width,canvas.height);
-          if(results.poseLandmarks){
-            drawConnectors(ctx, results.poseLandmarks, Pose.POSE_CONNECTIONS, {color:'lime',lineWidth:2});
-            drawLandmarks(ctx, results.poseLandmarks, {color:'red',lineWidth:1});
-          }
-          ctx.restore();
-        });
+      // 2) Pose を上書き描画
+      if(results.poseLandmarks){
+        drawConnectors(ctx, results.poseLandmarks, Pose.POSE_CONNECTIONS,
+                       {color:'lime', lineWidth:2});
+        drawLandmarks(ctx, results.poseLandmarks,
+                      {color:'red', lineWidth:1});
       }
+      ctx.restore();
+    }
 
-      // 3. カメラ開始
-      async function startCamera() {
-        const deviceId = cameraSelect.value;
-        let temp = await navigator.mediaDevices.getUserMedia({video:{deviceId}});
-        const cap = temp.getVideoTracks()[0].getCapabilities();
-        temp.getTracks().forEach(t=>t.stop());
-        const maxW = cap.width?.max||640, maxH = cap.height?.max||480;
-        maxResolutionInfo.innerText = `最大解像度: ${maxW}×${maxH}`;
-        const p = parseInt(resPercentInput.value)||100;
-        const w = Math.floor(maxW*p/100), h = Math.floor(maxH*p/100);
-        const fps = parseInt(frameRateInput.value)||15;
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video:{deviceId, width:{exact:w}, height:{exact:h}, frameRate:{ideal:fps}}
-        });
-        video.srcObject = stream;
-        await new Promise(r=>video.onloadedmetadata=r);
-        canvas.width = video.videoWidth;
-        canvas.height= video.videoHeight;
-        video.play();
-      }
+    // カメラ開始
+    async function start(){
+      // 解像度調査
+      const devId = camSelect.value;
+      let tmp = await navigator.mediaDevices.getUserMedia({video:{deviceId:devId}});
+      const track = tmp.getVideoTracks()[0];
+      const caps = track.getCapabilities();
+      const maxW = caps.width?.max||640, maxH = caps.height?.max||480;
+      maxInfo.innerText=`最大解像度: ${maxW}×${maxH}`;
+      tmp.getTracks().forEach(t=>t.stop());
 
-      // 4. ループ処理
-      async function processVideo() {
-        const fps = parseInt(frameRateInput.value)||15;
-        const interval = 1000/fps;
-        async function loop(){
-          if(!video.paused) await pose.send({image:video});
-          processingLoopId = setTimeout(loop, interval);
-        }
-        loop();
-      }
+      // 希望解像度＆fps
+      const p=+resInput.value, w=Math.floor(maxW*p/100), h=Math.floor(maxH*p/100);
+      const fps=+fpsInput.value;
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video:{ deviceId:devId, width:{exact:w}, height:{exact:h}, frameRate:{ideal:fps} }
+      });
+      video.srcObject = stream;
+      await new Promise(r=>video.onloadedmetadata=r);
+      canvas.width=video.videoWidth;
+      canvas.height=video.videoHeight;
 
-      startButton.onclick=async()=>{
-        await startCamera();
-        initializePose();
-        processVideo();
-      };
+      initPose();
+      initSeg();
 
-      // 5. 記録ボタン
-      captureButton.onclick=()=>{
-        clearTimeout(processingLoopId);
-        if(!latestResults?.poseLandmarks){
-          poseCoordinatesDiv.innerHTML='<p>検出なし</p>';
-          Plotly.purge('plotly3d');
-          return;
-        }
-        const lm = latestResults.poseLandmarks;
-        // テーブル表示
-        let tbl='<h3>座標 (x,y,z)</h3><table><tr><th>i</th><th>x</th><th>y</th><th>z</th></tr>';
-        lm.forEach((p,i)=>tbl+=`<tr><td>${i}</td><td>${p.x.toFixed(3)}</td><td>${p.y.toFixed(3)}</td><td>${p.z.toFixed(3)}</td></tr>`);
-        tbl+='</table>'; poseCoordinatesDiv.innerHTML=tbl;
+      // ループ実行
+      (function loop(){
+        pose.send({image:video});
+        seg.send({image:video});
+        loopId = setTimeout(loop,1000/fps);
+      })();
+    }
 
-        // 3D 散布データ
-        const xs=lm.map(p=>(p.x-0.5)*100),
-              ys=lm.map(p=>(0.5-p.y)*100),
-              zs=lm.map(p=>p.z*100);
-
-        // ボーン接続用ラインデータ
-        const conns = Pose.POSE_CONNECTIONS;  // [[i,j],...]
-        let lineX=[], lineY=[], lineZ=[];
-        conns.forEach(([i,j])=>{
-          lineX.push(xs[i], xs[j], null);
-          lineY.push(ys[i], ys[j], null);
-          lineZ.push(zs[i], zs[j], null);
-        });
-
-        // Plotly プロット
-        Plotly.newPlot('plotly3d', [
-          {
-            x: xs, y: ys, z: zs,
-            mode:'markers', type:'scatter3d',
-            marker:{size:4,color:'red'}
-          },
-          {
-            x: lineX, y: lineY, z: lineZ,
-            mode:'lines', type:'scatter3d',
-            line:{color:'blue',width:2}
-          }
-        ], {
-          margin:{l:0,r:0,b:0,t:0},
-          scene:{xaxis:{title:'X'}, yaxis:{title:'Y'}, zaxis:{title:'Z'}}
-        });
-      };
-
-      enumerateCameras();
+    startBtn.onclick = ()=>{
+      clearTimeout(loopId);
+      start();
+    };
     </script>
   </body>
 </html>
