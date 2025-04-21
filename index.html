@@ -2,7 +2,7 @@
 <html>
   <head>
     <meta charset="UTF-8">
-    <title>MediaPipe Pose + Plotly.js 3Dプロット デモ</title>
+    <title>MediaPipe Pose + Plotly.js 3D骨格プロット デモ</title>
     <style>
       body { font-family: sans-serif; text-align: center; }
       video, canvas { display: block; margin: 10px auto; }
@@ -10,46 +10,39 @@
       #maxResolutionInfo, #poseCoordinates { margin-top: 5px; font-size: 0.9em; color: #555; }
       table { margin: auto; border-collapse: collapse; }
       table, th, td { border: 1px solid #aaa; padding: 4px; }
-      /* Plotly 3D プロット用コンテナ */
       #plotly3d { width: 640px; height: 300px; margin: 10px auto; }
     </style>
   </head>
   <body>
-    <h2>MediaPipe Pose: カメラ選択, FPS, 解像度指定 & 記録 + 3D散布図 (Plotly.js)</h2>
+    <h2>MediaPipe Pose: ボーン付き3D散布図 (Plotly.js)</h2>
     <div id="controls">
-      <label for="cameraSelect">カメラ選択:</label>
+      <label>カメラ:</label>
       <select id="cameraSelect"></select>
-      &nbsp;&nbsp;
-      <label for="frameRateInput">fps:</label>
+      &nbsp;
+      <label>fps:</label>
       <input type="number" id="frameRateInput" min="1" value="15" style="width:60px;">
-      &nbsp;&nbsp;
-      <label for="resPercentInput">解像度%:</label>
+      &nbsp;
+      <label>解像度%:</label>
       <input type="number" id="resPercentInput" min="1" max="100" value="100" style="width:60px;">
-      &nbsp;&nbsp;
+      &nbsp;
       <button id="startButton">開始</button>
-      &nbsp;&nbsp;
       <button id="captureButton">記録</button>
       <div id="maxResolutionInfo"></div>
     </div>
 
-    <!-- 内部用 video, 2D 表示用 canvas -->
     <video id="video" autoplay muted playsinline style="display:none;"></video>
     <canvas id="outputCanvas"></canvas>
-
-    <!-- 座標テーブル表示 -->
     <div id="poseCoordinates"></div>
-    <!-- Plotly 3D 表示 -->
     <div id="plotly3d"></div>
 
-    <!-- ライブラリ読み込み -->
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
     <script src="https://cdn.plot.ly/plotly-2.24.1.min.js"></script>
 
     <script>
       const video = document.getElementById('video');
-      const outputCanvas = document.getElementById('outputCanvas');
-      const ctx = outputCanvas.getContext('2d');
+      const canvas = document.getElementById('outputCanvas');
+      const ctx = canvas.getContext('2d');
       const cameraSelect = document.getElementById('cameraSelect');
       const frameRateInput = document.getElementById('frameRateInput');
       const resPercentInput = document.getElementById('resPercentInput');
@@ -60,6 +53,7 @@
 
       let pose, processingLoopId, latestResults = null;
 
+      // 1. カメラ列挙
       async function enumerateCameras() {
         const devices = await navigator.mediaDevices.enumerateDevices();
         devices.filter(d=>d.kind==='videoinput').forEach((d,i)=>{
@@ -67,51 +61,48 @@
         });
       }
 
+      // 2. MediaPipe Pose 初期化
       function initializePose() {
         pose = new Pose({ locateFile: f=>`https://cdn.jsdelivr.net/npm/@mediapipe/pose/${f}` });
         pose.setOptions({
-          modelComplexity: 1,
-          smoothLandmarks: true,
-          minDetectionConfidence: 0.5,
-          minTrackingConfidence: 0.5
+          modelComplexity:1, smoothLandmarks:true,
+          minDetectionConfidence:0.5, minTrackingConfidence:0.5
         });
         pose.onResults(results=>{
           latestResults = results;
           ctx.save();
-          ctx.clearRect(0,0,outputCanvas.width,outputCanvas.height);
-          ctx.drawImage(results.image,0,0,outputCanvas.width,outputCanvas.height);
+          ctx.clearRect(0,0,canvas.width,canvas.height);
+          ctx.drawImage(results.image,0,0,canvas.width,canvas.height);
           if(results.poseLandmarks){
-            drawConnectors(ctx, results.poseLandmarks, Pose.POSE_CONNECTIONS, {color:'lime', lineWidth:2});
-            drawLandmarks(ctx, results.poseLandmarks, {color:'red', lineWidth:1});
+            drawConnectors(ctx, results.poseLandmarks, Pose.POSE_CONNECTIONS, {color:'lime',lineWidth:2});
+            drawLandmarks(ctx, results.poseLandmarks, {color:'red',lineWidth:1});
           }
           ctx.restore();
         });
       }
 
+      // 3. カメラ開始
       async function startCamera() {
         const deviceId = cameraSelect.value;
-        // 一旦キャプチャして能力調査
-        let tempStream = await navigator.mediaDevices.getUserMedia({video:{deviceId}});
-        const track = tempStream.getVideoTracks()[0];
-        const caps = track.getCapabilities();
-        const maxW = caps.width?.max||640, maxH = caps.height?.max||480;
+        let temp = await navigator.mediaDevices.getUserMedia({video:{deviceId}});
+        const cap = temp.getVideoTracks()[0].getCapabilities();
+        temp.getTracks().forEach(t=>t.stop());
+        const maxW = cap.width?.max||640, maxH = cap.height?.max||480;
         maxResolutionInfo.innerText = `最大解像度: ${maxW}×${maxH}`;
-        tempStream.getTracks().forEach(t=>t.stop());
-
         const p = parseInt(resPercentInput.value)||100;
         const w = Math.floor(maxW*p/100), h = Math.floor(maxH*p/100);
         const fps = parseInt(frameRateInput.value)||15;
-
         const stream = await navigator.mediaDevices.getUserMedia({
-          video:{ deviceId, width:{exact:w}, height:{exact:h}, frameRate:{ideal:fps} }
+          video:{deviceId, width:{exact:w}, height:{exact:h}, frameRate:{ideal:fps}}
         });
         video.srcObject = stream;
         await new Promise(r=>video.onloadedmetadata=r);
-        outputCanvas.width=video.videoWidth;
-        outputCanvas.height=video.videoHeight;
+        canvas.width = video.videoWidth;
+        canvas.height= video.videoHeight;
         video.play();
       }
 
+      // 4. ループ処理
       async function processVideo() {
         const fps = parseInt(frameRateInput.value)||15;
         const interval = 1000/fps;
@@ -122,36 +113,55 @@
         loop();
       }
 
-      startButton.onclick = async ()=>{
+      startButton.onclick=async()=>{
         await startCamera();
         initializePose();
         processVideo();
       };
 
-      captureButton.onclick = ()=>{
+      // 5. 記録ボタン
+      captureButton.onclick=()=>{
         clearTimeout(processingLoopId);
-        if(!latestResults?.poseLandmarks) {
+        if(!latestResults?.poseLandmarks){
           poseCoordinatesDiv.innerHTML='<p>検出なし</p>';
           Plotly.purge('plotly3d');
           return;
         }
         const lm = latestResults.poseLandmarks;
-        // テーブル
-        let tbl = '<h3>座標 (x,y,z)</h3><table><tr><th>i</th><th>x</th><th>y</th><th>z</th></tr>';
+        // テーブル表示
+        let tbl='<h3>座標 (x,y,z)</h3><table><tr><th>i</th><th>x</th><th>y</th><th>z</th></tr>';
         lm.forEach((p,i)=>tbl+=`<tr><td>${i}</td><td>${p.x.toFixed(3)}</td><td>${p.y.toFixed(3)}</td><td>${p.z.toFixed(3)}</td></tr>`);
-        tbl+='</table>';
-        poseCoordinatesDiv.innerHTML=tbl;
-        // Plotly 3D scatter
-        const xs = lm.map(p=>(p.x-0.5)*100),
-              ys = lm.map(p=>(0.5-p.y)*100),
-              zs = lm.map(p=>p.z*100);
-        Plotly.newPlot('plotly3d',[{
-          x: xs, y: ys, z: zs,
-          mode: 'markers', type: 'scatter3d',
-          marker: { size:4, color:'red' }
-        }], {
+        tbl+='</table>'; poseCoordinatesDiv.innerHTML=tbl;
+
+        // 3D 散布データ
+        const xs=lm.map(p=>(p.x-0.5)*100),
+              ys=lm.map(p=>(0.5-p.y)*100),
+              zs=lm.map(p=>p.z*100);
+
+        // ボーン接続用ラインデータ
+        const conns = Pose.POSE_CONNECTIONS;  // [[i,j],...]
+        let lineX=[], lineY=[], lineZ=[];
+        conns.forEach(([i,j])=>{
+          lineX.push(xs[i], xs[j], null);
+          lineY.push(ys[i], ys[j], null);
+          lineZ.push(zs[i], zs[j], null);
+        });
+
+        // Plotly プロット
+        Plotly.newPlot('plotly3d', [
+          {
+            x: xs, y: ys, z: zs,
+            mode:'markers', type:'scatter3d',
+            marker:{size:4,color:'red'}
+          },
+          {
+            x: lineX, y: lineY, z: lineZ,
+            mode:'lines', type:'scatter3d',
+            line:{color:'blue',width:2}
+          }
+        ], {
           margin:{l:0,r:0,b:0,t:0},
-          scene:{ xaxis:{title:'X'}, yaxis:{title:'Y'}, zaxis:{title:'Z'} }
+          scene:{xaxis:{title:'X'}, yaxis:{title:'Y'}, zaxis:{title:'Z'}}
         });
       };
 
