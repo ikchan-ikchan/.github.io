@@ -1,138 +1,195 @@
 <!DOCTYPE html>
-<html>
-  <head>
-    <meta charset="UTF-8">
-    <title>MediaPipe Pose + Plotly.js 3D 表示（凹形状）デモ</title>
-    <style>
-      body { font-family:sans-serif; text-align:center; }
-      canvas, video { display:block; margin:10px auto; }
-      #controls { margin:10px; }
-      #threeContainer { width:640px; height:300px; margin:10px auto; }
-      table { margin:auto; border-collapse:collapse; }
-      th,td { border:1px solid #aaa; padding:4px; }
-    </style>
-  </head>
-  <body>
-    <h2>MediaPipe Pose: 記録時のみ 3D プロット（凹形状）デモ</h2>
-    <div id="controls">
-      <label>カメラ: <select id="cameraSelect"></select></label>
-      <label>FPS: <input id="frameRateInput" type="number" min="1" value="15" style="width:50px"></label>
-      <label>解像度%: <input id="resPercentInput" type="number" min="1" max="100" value="100" style="width:50px"></label>
-      <button id="startButton">開始</button>
-      <button id="captureButton">記録</button>
-      <div id="maxResolutionInfo" style="font-size:0.9em;color:#555"></div>
-    </div>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <title>Browser‑VNect Lite – MediaPipe Pose 3D</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- Three.js CDN -->
+  <script src="https://unpkg.com/three@0.159.0/build/three.min.js"></script>
+  <!-- MediaPipe Pose (wasm) -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469409/pose.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+  <style>
+    body{margin:0;display:flex;flex-direction:column;align-items:center;background:#111;color:#eee;font-family:sans-serif}
+    #videoElement{display:none}
+    #canvas2d{position:absolute;top:0;left:0;pointer-events:none}
+    #threeContainer{width:100vw;height:100vh}
+    #info{position:fixed;bottom:0;left:0;padding:6px;font-size:12px;background:rgba(0,0,0,.5)}
+  </style>
+</head>
+<body>
+  <video id="videoElement" playsinline></video>
+  <canvas id="canvas2d"></canvas>
+  <div id="threeContainer"></div>
+  <div id="info">Browser‑VNect Lite – MediaPipe Pose 3D (GitHub Pages ready)</div>
 
-    <video id="video" autoplay muted playsinline style="display:none;"></video>
-    <canvas id="outputCanvas"></canvas>
-    <div id="poseCoordinates"></div>
-    <div id="threeContainer"></div>
+<script>
+/*** --- Three.js scene setup --- ***/
+const container = document.getElementById('threeContainer');
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x111111);
+const camera3d = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 10);
+camera3d.position.set(0, 1.2, 2);
+const renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setSize(window.innerWidth, window.innerHeight);
+container.appendChild(renderer.domElement);
+// lights
+scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 1.2));
 
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
-    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+// skeleton line material
+const boneMat = new THREE.LineBasicMaterial({color:0x42a5f5});
+let skeletonLines = [];
+function createSkeleton(){
+  const bones = poseConnections;
+  bones.forEach(()=>{
+    const geo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]);
+    const line = new THREE.Line(geo, boneMat);
+    scene.add(line);
+    skeletonLines.push(line);
+  });
+}
+createSkeleton();
 
-    <script>
-    const video=document.getElementById('video'),
-          outC=document.getElementById('outputCanvas'),
-          ctx=outC.getContext('2d'),
-          camSel=document.getElementById('cameraSelect'),
-          fpsIn=document.getElementById('frameRateInput'),
-          resIn=document.getElementById('resPercentInput'),
-          startBtn=document.getElementById('startButton'),
-          capBtn=document.getElementById('captureButton'),
-          maxInfo=document.getElementById('maxResolutionInfo'),
-          coordDiv=document.getElementById('poseCoordinates'),
-          threeDiv=document.getElementById('threeContainer');
-    let pose, loopId, latest=null;
+/*** --- Pose definitions --- ***/
+// MediaPipe body connections (parent-child index pairs)
+const poseConnections = [
+  [0,1],[1,2],[2,3],[3,4], // right arm
+  [0,5],[5,6],[6,7],[7,8], // left arm
+  [9,10], // shoulders
+  [11,12], // hips
+  [11,13],[13,15],[15,17],[17,19],[19,21], // right leg + foot
+  [12,14],[14,16],[16,18],[18,20],[20,22], // left leg + foot
+  [11,23],[12,24],[23,24] // spine bottom
+];
 
-    // カメラ列挙
-    async function enumCams(){
-      const devs=await navigator.mediaDevices.enumerateDevices();
-      camSel.innerHTML='';
-      devs.filter(d=>d.kind==='videoinput')
-          .forEach((d,i)=>{
-            const o=new Option(d.label||`Cam${i+1}`,d.deviceId);
-            camSel.add(o);
-          });
+let refLengths = new Map();
+let refReady = false;
+let frameCount = 0;
+const LEARN_FRAMES = 30;
+
+/*** --- Simple EMA smoother --- ***/
+let prevLandmarks = null;
+const ALPHA = 0.7; // higher = smoother (0.0‑1.0)
+
+function smooth(current){
+  if(!prevLandmarks) return current;
+  return current.map((p,i)=>({
+    x: ALPHA*prevLandmarks[i].x + (1-ALPHA)*p.x,
+    y: ALPHA*prevLandmarks[i].y + (1-ALPHA)*p.y,
+    z: ALPHA*prevLandmarks[i].z + (1-ALPHA)*p.z,
+    visibility:p.visibility
+  }));
+}
+
+/*** --- Bone‑length fitting & forward kinematics --- ***/
+function normalizeBones(landmarks){
+  if(!refReady) return landmarks; // nothing to do yet
+  const pts = landmarks.map(p=>({...p}));
+  poseConnections.forEach(([a,b])=>{
+    const v = new THREE.Vector3(pts[b].x-pts[a].x, pts[b].y-pts[a].y, pts[b].z-pts[a].z);
+    const dir = v.clone().normalize();
+    const key = `${a}-${b}`;
+    const len = refLengths.get(key);
+    if(len){
+      dir.multiplyScalar(len);
+      pts[b].x = pts[a].x + dir.x;
+      pts[b].y = pts[a].y + dir.y;
+      pts[b].z = pts[a].z + dir.z;
     }
+  });
+  return pts;
+}
 
-    function initPose(){
-      pose=new Pose({locateFile:f=>`https://cdn.jsdelivr.net/npm/@mediapipe/pose/${f}`});
-      pose.setOptions({modelComplexity:1,smoothLandmarks:true,minDetectionConfidence:0.5,minTrackingConfidence:0.5});
-      pose.onResults(r=>{
-        latest=r;
-        ctx.save();
-        ctx.clearRect(0,0,outC.width,outC.height);
-        ctx.drawImage(r.image,0,0,outC.width,outC.height);
-        if(r.poseLandmarks){
-          drawConnectors(ctx,r.poseLandmarks,Pose.POSE_CONNECTIONS,{color:'lime',lineWidth:2});
-          drawLandmarks(ctx,r.poseLandmarks,{color:'red',lineWidth:1});
-        }
-        ctx.restore();
-      });
-    }
+function learnReferenceLengths(landmarks){
+  poseConnections.forEach(([a,b])=>{
+    const dx = landmarks[b].x-landmarks[a].x;
+    const dy = landmarks[b].y-landmarks[a].y;
+    const dz = landmarks[b].z-landmarks[a].z;
+    const l = Math.sqrt(dx*dx+dy*dy+dz*dz);
+    const key = `${a}-${b}`;
+    const prev = refLengths.get(key)||0;
+    refLengths.set(key, prev + l);
+  });
+  frameCount++;
+  if(frameCount===LEARN_FRAMES){
+    // average lengths
+    poseConnections.forEach(([a,b])=>{
+      const key=`${a}-${b}`;
+      refLengths.set(key, refLengths.get(key)/LEARN_FRAMES);
+    });
+    refReady = true;
+    console.log('Reference bone lengths learned');
+  }
+}
 
-    // カメラ開始
-    async function startCam(){
-      const id=camSel.value;
-      let tmp=await navigator.mediaDevices.getUserMedia({video:{deviceId:{exact:id}}});
-      const cap=tmp.getVideoTracks()[0].getCapabilities();
-      const maxW=cap.width?.max||640, maxH=cap.height?.max||480;
-      maxInfo.textContent=`最大解像度: ${maxW}×${maxH}`;
-      tmp.getTracks().forEach(t=>t.stop());
-      const p=parseInt(resIn.value)||100, w=Math.floor(maxW*p/100), h=Math.floor(maxH*p/100),
-            fps=parseInt(fpsIn.value)||15;
-      const strm=await navigator.mediaDevices.getUserMedia({
-        video:{deviceId:{exact:id},width:{exact:w},height:{exact:h},frameRate:{ideal:fps}}
-      });
-      video.srcObject=strm;
-      await new Promise(r=>video.onloadedmetadata=()=>{ 
-        outC.width=video.videoWidth;
-        outC.height=video.videoHeight;
-        video.play(); r();
-      });
-    }
+function updateSkeleton(landmarks){
+  // convert Mediapipe coords (meters, Y up, Z forward‑) to THREE (Y up, Z forward)
+  const pts = landmarks.map(p=>new THREE.Vector3(p.x, p.y, -p.z));
+  skeletonLines.forEach((line,idx)=>{
+    const [a,b] = poseConnections[idx];
+    const geo = line.geometry;
+    geo.attributes.position.setXYZ(0, pts[a].x, pts[a].y, pts[a].z);
+    geo.attributes.position.setXYZ(1, pts[b].x, pts[b].y, pts[b].z);
+    geo.attributes.position.needsUpdate = true;
+  });
+}
 
-    // ループ
-    async function procLoop(){
-      const fps=parseInt(fpsIn.value)||15, iv=1000/fps;
-      async function f(){
-        if(!video.paused&&!video.ended) await pose.send({image:video});
-        loopId=setTimeout(f,iv);
-      }
-      f();
-    }
+function animate(){
+  requestAnimationFrame(animate);
+  renderer.render(scene, camera3d);
+}
+animate();
 
-    // 3D プロット修正
-    function draw3DPlot(lms){
-      const sx=[],sy=[],sz=[];
-      lms.forEach(l=>{ if(l){ sx.push((l.x-0.5)*100); sy.push((0.5-l.y)*100); sz.push(l.z*100); }});
-      const pts={x:sx,y:sy,z:sz,mode:'markers',type:'scatter3d',marker:{size:4,color:'red'}};
-      const mesh={x:sx,y:sy,z:sz,type:'mesh3d',alphahull:5,opacity:0.5,color:'lightgray'};
-      const layout={margin:{l:0,r:0,b:0,t:0},scene:{aspectmode:'auto'}};
-      Plotly.newPlot(threeDiv,[mesh,pts],layout);
-    }
+/*** --- MediaPipe Pose setup --- ***/
+const pose = new Pose.Pose({
+  locateFile: file=>`https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469409/${file}`
+});
+pose.setOptions({
+  modelComplexity:1,
+  smoothLandmarks:false,
+  enableSegmentation:false,
+  smoothSegmentation:false,
+  selfieMode:false,
+  upperBodyOnly:false,
+  minDetectionConfidence:0.5,
+  minTrackingConfidence:0.5
+});
 
-    // イベント
-    startBtn.onclick=async()=>{
-      await startCam(); initPose(); procLoop();
-    };
-    capBtn.onclick=()=>{
-      clearTimeout(loopId);
-      if(latest?.poseLandmarks){
-        let t=`<h3>記録された座標</h3><table><tr><th>Idx</th><th>x</th><th>y</th><th>z</th></tr>`;
-        latest.poseLandmarks.forEach((l,i)=>{
-          t+=`<tr><td>${i}</td><td>${l.x.toFixed(3)}</td><td>${l.y.toFixed(3)}</td><td>${l.z.toFixed(3)}</td></tr>`;
-        });
-        coordDiv.innerHTML=t+'</table>';
-        draw3DPlot(latest.poseLandmarks);
-      } else {
-        coordDiv.innerHTML='<p>ポーズ未検出</p>'; threeDiv.innerHTML='';
-      }
-    };
+const canvas2d=document.getElementById('canvas2d');
+const ctx2d=canvas2d.getContext('2d');
 
-    enumCams();
-    </script>
-  </body>
+pose.onResults(res=>{
+  if(!res.worldLandmarks) return;
+  canvas2d.width=res.image.width;
+  canvas2d.height=res.image.height;
+  ctx2d.clearRect(0,0,canvas2d.width,canvas2d.height);
+  // draw 2D landmarks quick debug
+  res.landmarks.forEach(l=>{
+    ctx2d.fillStyle='#0f0';
+    ctx2d.beginPath();
+    ctx2d.arc(l.x*canvas2d.width,l.y*canvas2d.height,3,0,Math.PI*2);
+    ctx2d.fill();
+  });
+
+  let wls = res.worldLandmarks; // meters
+  if(!refReady) learnReferenceLengths(wls);
+
+  wls = smooth(wls);
+  wls = normalizeBones(wls);
+  prevLandmarks = wls;
+
+  updateSkeleton(wls);
+});
+
+/*** --- camera capture --- ***/
+const videoElement=document.getElementById('videoElement');
+const camera=new CameraUtils.Camera(videoElement,{
+  onFrame: async ()=>{await pose.send({image:videoElement});},
+  width:640,
+  height:480
+});
+camera.start();
+
+</script>
+</body>
 </html>
