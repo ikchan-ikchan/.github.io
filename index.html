@@ -1,195 +1,169 @@
 <!DOCTYPE html>
-<html lang="ja">
-<head>
-  <meta charset="UTF-8" />
-  <title>Browser‑VNect Lite – MediaPipe Pose 3D</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <!-- Three.js CDN -->
-  <script src="https://unpkg.com/three@0.159.0/build/three.min.js"></script>
-  <!-- MediaPipe Pose (wasm) -->
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469409/pose.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
-  <style>
-    body{margin:0;display:flex;flex-direction:column;align-items:center;background:#111;color:#eee;font-family:sans-serif}
-    #videoElement{display:none}
-    #canvas2d{position:absolute;top:0;left:0;pointer-events:none}
-    #threeContainer{width:100vw;height:100vh}
-    #info{position:fixed;bottom:0;left:0;padding:6px;font-size:12px;background:rgba(0,0,0,.5)}
-  </style>
-</head>
-<body>
-  <video id="videoElement" playsinline></video>
-  <canvas id="canvas2d"></canvas>
-  <div id="threeContainer"></div>
-  <div id="info">Browser‑VNect Lite – MediaPipe Pose 3D (GitHub Pages ready)</div>
-
-<script>
-/*** --- Three.js scene setup --- ***/
-const container = document.getElementById('threeContainer');
-const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x111111);
-const camera3d = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 10);
-camera3d.position.set(0, 1.2, 2);
-const renderer = new THREE.WebGLRenderer({antialias:true});
-renderer.setSize(window.innerWidth, window.innerHeight);
-container.appendChild(renderer.domElement);
-// lights
-scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 1.2));
-
-// skeleton line material
-const boneMat = new THREE.LineBasicMaterial({color:0x42a5f5});
-let skeletonLines = [];
-function createSkeleton(){
-  const bones = poseConnections;
-  bones.forEach(()=>{
-    const geo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]);
-    const line = new THREE.Line(geo, boneMat);
-    scene.add(line);
-    skeletonLines.push(line);
-  });
-}
-createSkeleton();
-
-/*** --- Pose definitions --- ***/
-// MediaPipe body connections (parent-child index pairs)
-const poseConnections = [
-  [0,1],[1,2],[2,3],[3,4], // right arm
-  [0,5],[5,6],[6,7],[7,8], // left arm
-  [9,10], // shoulders
-  [11,12], // hips
-  [11,13],[13,15],[15,17],[17,19],[19,21], // right leg + foot
-  [12,14],[14,16],[16,18],[18,20],[20,22], // left leg + foot
-  [11,23],[12,24],[23,24] // spine bottom
-];
-
-let refLengths = new Map();
-let refReady = false;
-let frameCount = 0;
-const LEARN_FRAMES = 30;
-
-/*** --- Simple EMA smoother --- ***/
-let prevLandmarks = null;
-const ALPHA = 0.7; // higher = smoother (0.0‑1.0)
-
-function smooth(current){
-  if(!prevLandmarks) return current;
-  return current.map((p,i)=>({
-    x: ALPHA*prevLandmarks[i].x + (1-ALPHA)*p.x,
-    y: ALPHA*prevLandmarks[i].y + (1-ALPHA)*p.y,
-    z: ALPHA*prevLandmarks[i].z + (1-ALPHA)*p.z,
-    visibility:p.visibility
-  }));
-}
-
-/*** --- Bone‑length fitting & forward kinematics --- ***/
-function normalizeBones(landmarks){
-  if(!refReady) return landmarks; // nothing to do yet
-  const pts = landmarks.map(p=>({...p}));
-  poseConnections.forEach(([a,b])=>{
-    const v = new THREE.Vector3(pts[b].x-pts[a].x, pts[b].y-pts[a].y, pts[b].z-pts[a].z);
-    const dir = v.clone().normalize();
-    const key = `${a}-${b}`;
-    const len = refLengths.get(key);
-    if(len){
-      dir.multiplyScalar(len);
-      pts[b].x = pts[a].x + dir.x;
-      pts[b].y = pts[a].y + dir.y;
-      pts[b].z = pts[a].z + dir.z;
-    }
-  });
-  return pts;
-}
-
-function learnReferenceLengths(landmarks){
-  poseConnections.forEach(([a,b])=>{
-    const dx = landmarks[b].x-landmarks[a].x;
-    const dy = landmarks[b].y-landmarks[a].y;
-    const dz = landmarks[b].z-landmarks[a].z;
-    const l = Math.sqrt(dx*dx+dy*dy+dz*dz);
-    const key = `${a}-${b}`;
-    const prev = refLengths.get(key)||0;
-    refLengths.set(key, prev + l);
-  });
-  frameCount++;
-  if(frameCount===LEARN_FRAMES){
-    // average lengths
-    poseConnections.forEach(([a,b])=>{
-      const key=`${a}-${b}`;
-      refLengths.set(key, refLengths.get(key)/LEARN_FRAMES);
-    });
-    refReady = true;
-    console.log('Reference bone lengths learned');
-  }
-}
-
-function updateSkeleton(landmarks){
-  // convert Mediapipe coords (meters, Y up, Z forward‑) to THREE (Y up, Z forward)
-  const pts = landmarks.map(p=>new THREE.Vector3(p.x, p.y, -p.z));
-  skeletonLines.forEach((line,idx)=>{
-    const [a,b] = poseConnections[idx];
-    const geo = line.geometry;
-    geo.attributes.position.setXYZ(0, pts[a].x, pts[a].y, pts[a].z);
-    geo.attributes.position.setXYZ(1, pts[b].x, pts[b].y, pts[b].z);
-    geo.attributes.position.needsUpdate = true;
-  });
-}
-
-function animate(){
-  requestAnimationFrame(animate);
-  renderer.render(scene, camera3d);
-}
-animate();
-
-/*** --- MediaPipe Pose setup --- ***/
-const pose = new Pose.Pose({
-  locateFile: file=>`https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469409/${file}`
-});
-pose.setOptions({
-  modelComplexity:1,
-  smoothLandmarks:false,
-  enableSegmentation:false,
-  smoothSegmentation:false,
-  selfieMode:false,
-  upperBodyOnly:false,
-  minDetectionConfidence:0.5,
-  minTrackingConfidence:0.5
-});
-
-const canvas2d=document.getElementById('canvas2d');
-const ctx2d=canvas2d.getContext('2d');
-
-pose.onResults(res=>{
-  if(!res.worldLandmarks) return;
-  canvas2d.width=res.image.width;
-  canvas2d.height=res.image.height;
-  ctx2d.clearRect(0,0,canvas2d.width,canvas2d.height);
-  // draw 2D landmarks quick debug
-  res.landmarks.forEach(l=>{
-    ctx2d.fillStyle='#0f0';
-    ctx2d.beginPath();
-    ctx2d.arc(l.x*canvas2d.width,l.y*canvas2d.height,3,0,Math.PI*2);
-    ctx2d.fill();
-  });
-
-  let wls = res.worldLandmarks; // meters
-  if(!refReady) learnReferenceLengths(wls);
-
-  wls = smooth(wls);
-  wls = normalizeBones(wls);
-  prevLandmarks = wls;
-
-  updateSkeleton(wls);
-});
-
-/*** --- camera capture --- ***/
-const videoElement=document.getElementById('videoElement');
-const camera=new CameraUtils.Camera(videoElement,{
-  onFrame: async ()=>{await pose.send({image:videoElement});},
-  width:640,
-  height:480
-});
-camera.start();
-
-</script>
-</body>
+<html>
+  <head>
+    <meta charset="UTF-8">
+    <title>MediaPipe Pose: カメラ選択, FPS, 解像度指定デモ（解像度更新版）</title>
+    <style>
+      body { font-family: sans-serif; text-align: center; }
+      video, canvas { display: block; margin: 10px auto; }
+      #controls { margin: 10px; }
+      #maxResolutionInfo { margin-top: 5px; font-size: 0.9em; color: #555; }
+    </style>
+  </head>
+  <body>
+    <h2>MediaPipe Pose: カメラ選択, FPS, 解像度指定デモ</h2>
+    <div id="controls">
+      <label for="cameraSelect">カメラ選択:</label>
+      <select id="cameraSelect"></select>
+      &nbsp;&nbsp;
+      <label for="frameRateInput">フレームレート (fps):</label>
+      <input type="number" id="frameRateInput" min="1" value="15" style="width:60px;">
+      &nbsp;&nbsp;
+      <label for="resPercentInput">解像度 (%):</label>
+      <input type="number" id="resPercentInput" min="1" max="100" value="100" style="width:60px;">
+      &nbsp;&nbsp;
+      <button id="startButton">開始</button>
+      <div id="maxResolutionInfo"></div>
+    </div>
+    
+    <!-- カメラ映像（内部利用：Canvas に描画） -->
+    <video id="video" autoplay muted playsinline style="display:none;"></video>
+    <!-- 描画用キャンバス -->
+    <canvas id="outputCanvas"></canvas>
+    
+    <!-- MediaPipe Pose と Drawing Utils の読み込み -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+    
+    <script>
+      const video = document.getElementById('video');
+      const outputCanvas = document.getElementById('outputCanvas');
+      const canvasCtx = outputCanvas.getContext('2d');
+      const cameraSelect = document.getElementById('cameraSelect');
+      const frameRateInput = document.getElementById('frameRateInput');
+      const resPercentInput = document.getElementById('resPercentInput');
+      const startButton = document.getElementById('startButton');
+      const maxResolutionInfo = document.getElementById('maxResolutionInfo');
+      
+      let pose = null;
+      
+      // ① 利用可能なカメラを列挙する
+      async function enumerateCameras() {
+        try {
+          const devices = await navigator.mediaDevices.enumerateDevices();
+          const videoDevices = devices.filter(device => device.kind === 'videoinput');
+          cameraSelect.innerHTML = '';
+          videoDevices.forEach((device, index) => {
+            const option = document.createElement('option');
+            option.value = device.deviceId;
+            option.text = device.label || `カメラ ${index + 1}`;
+            cameraSelect.appendChild(option);
+          });
+        } catch (error) {
+          console.error('カメラの列挙に失敗:', error);
+        }
+      }
+      
+      // ② MediaPipe Pose の初期化
+      function initializePose() {
+        pose = new Pose({
+          locateFile: (file) => {
+            return `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`;
+          }
+        });
+        pose.setOptions({
+          modelComplexity: 1,
+          smoothLandmarks: true,
+          minDetectionConfidence: 0.5,
+          minTrackingConfidence: 0.5
+        });
+        pose.onResults(onResults);
+      }
+      
+      // ③ 結果を Canvas に描画するコールバック
+      function onResults(results) {
+        canvasCtx.save();
+        canvasCtx.clearRect(0, 0, outputCanvas.width, outputCanvas.height);
+        canvasCtx.drawImage(results.image, 0, 0, outputCanvas.width, outputCanvas.height);
+        if (results.poseLandmarks) {
+          drawConnectors(canvasCtx, results.poseLandmarks, Pose.POSE_CONNECTIONS, { color: 'lime', lineWidth: 2 });
+          drawLandmarks(canvasCtx, results.poseLandmarks, { color: 'red', lineWidth: 1 });
+        }
+        canvasCtx.restore();
+      }
+      
+      // ④ 選択したカメラで、最大解像度の何％かを指定して映像を取得する
+      async function startCamera() {
+        const selectedDeviceId = cameraSelect.value;
+        // まずは制約なしでストリームを取得して capabilities を調べる
+        const tempConstraints = { video: { deviceId: { exact: selectedDeviceId } } };
+        let tempStream;
+        try {
+          tempStream = await navigator.mediaDevices.getUserMedia(tempConstraints);
+        } catch (error) {
+          console.error('初回ストリームの取得に失敗:', error);
+          return;
+        }
+        
+        const videoTrack = tempStream.getVideoTracks()[0];
+        const capabilities = videoTrack.getCapabilities();
+        let maxWidth = (capabilities.width && capabilities.width.max) || 640;
+        let maxHeight = (capabilities.height && capabilities.height.max) || 480;
+        maxResolutionInfo.innerText = `このカメラの最大解像度: ${maxWidth} x ${maxHeight}`;
+        tempStream.getTracks().forEach(track => track.stop());
+        
+        const resPercent = parseInt(resPercentInput.value) || 100;
+        const desiredWidth = Math.floor(maxWidth * (resPercent / 100));
+        const desiredHeight = Math.floor(maxHeight * (resPercent / 100));
+        const frameRate = parseInt(frameRateInput.value) || 15;
+        
+        // 下記では「exact」を使って厳密に解像度指定（変更可能な場合のみ反映されます）
+        const constraints = {
+          video: {
+            deviceId: { exact: selectedDeviceId },
+            width: { exact: desiredWidth },
+            height: { exact: desiredHeight },
+            frameRate: { ideal: frameRate }
+          }
+        };
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia(constraints);
+          video.srcObject = stream;
+          return new Promise(resolve => {
+            video.onloadedmetadata = () => {
+              // 取得した解像度に合わせてキャンバスサイズも更新
+              outputCanvas.width = video.videoWidth;
+              outputCanvas.height = video.videoHeight;
+              video.play();
+              resolve();
+            };
+          });
+        } catch (error) {
+          console.error('カメラ映像の取得に失敗:', error);
+        }
+      }
+      
+      // ⑤ 映像フレームを MediaPipe Pose に送信するループ
+      async function processVideo() {
+        const frameRate = parseInt(frameRateInput.value) || 15;
+        const interval = 1000 / frameRate;
+        async function sendFrame() {
+          if (!video.paused && !video.ended) {
+            await pose.send({ image: video });
+          }
+          setTimeout(sendFrame, interval);
+        }
+        sendFrame();
+      }
+      
+      // ⑥ スタートボタン押下時の処理
+      startButton.addEventListener('click', async () => {
+        await startCamera();
+        initializePose();
+        processVideo();
+      });
+      
+      enumerateCameras();
+    </script>
+  </body>
 </html>
