@@ -3,225 +3,174 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>MediaPipe Pose 3‑D + Light IK Demo</title>
+    <title>MediaPipe Pose 3‑D + IK Demo</title>
     <style>
+      * { box-sizing: border-box; }
       body {
         margin: 0;
         font-family: system-ui, sans-serif;
-        display: grid;
-        place-items: center;
-        gap: 1rem;
-        background: #111;
-        color: #eee;
+        background:#101010;
+        color:#f0f0f0;
+        display:flex;
+        flex-direction:column;
+        align-items:center;
+        gap:0.8rem;
+        padding:0.8rem;
       }
-      #video,
-      #threeCanvas {
-        border-radius: 1rem;
-        box-shadow: 0 0 15px rgba(0, 0, 0, 0.8);
-      }
+      #video{border-radius:0.75rem;box-shadow:0 4px 20px #000;width:480px;height:360px;object-fit:cover;}
+      #threeCanvas{border-radius:0.75rem;box-shadow:0 4px 20px #000;}
+      #warn{color:#ff8080;font-size:0.9rem}
     </style>
   </head>
   <body>
-    <video id="video" width="480" height="360" autoplay muted playsinline></video>
+    <video id="video" autoplay muted playsinline></video>
     <canvas id="threeCanvas" width="480" height="360"></canvas>
+    <div id="warn"></div>
 
     <!-- Three.js -->
     <script src="https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.min.js"></script>
-    <!-- MediaPipe Tasks Vision -->
+
     <script type="module">
-      import {
-        FilesetResolver,
-        PoseLandmarker,
-      } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0";
+      import { FilesetResolver, PoseLandmarker } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0";
 
-      // ---------- 1. Camera setup ----------
-      const video = document.getElementById("video");
-      const constraints = { video: { facingMode: "user" } };
-      navigator.mediaDevices.getUserMedia(constraints).then((stream) => {
+      //------------------------------
+      // 0. Utility helpers
+      //------------------------------
+      const warn = (msg)=>document.getElementById('warn').textContent=msg;
+
+      //------------------------------
+      // 1. Camera setup
+      //------------------------------
+      const video = document.getElementById('video');
+      async function initCam(){
+        const stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:'user',width:640,height:480}});
         video.srcObject = stream;
-      });
+        return new Promise(r=>video.onloadedmetadata=r);
+      }
 
-      // ---------- 2. Three.js scene ----------
-      const canvas = document.getElementById("threeCanvas");
-      const renderer = new THREE.WebGLRenderer({ canvas, alpha: true });
-      renderer.setSize(canvas.width, canvas.height);
+      //------------------------------
+      // 2. Three.js scene
+      //------------------------------
+      const canvas = document.getElementById('threeCanvas');
+      const renderer = new THREE.WebGLRenderer({canvas,alpha:true,antialias:true});
+      renderer.setSize(canvas.width,canvas.height,false);
+      renderer.setPixelRatio(window.devicePixelRatio);
+      renderer.setClearColor(0x000000,0);
+
       const scene = new THREE.Scene();
-      const camera = new THREE.PerspectiveCamera(
-        45,
-        canvas.width / canvas.height,
-        0.1,
-        10
-      );
-      camera.position.set(0, 1.2, 2.2);
-      const light = new THREE.DirectionalLight(0xffffff, 1.5);
-      light.position.set(0, 2, 2);
-      scene.add(light);
+      const cam = new THREE.PerspectiveCamera(45,canvas.width/canvas.height,0.01,10);
+      cam.position.set(0,1.2,2.2);
 
-      // Skeleton definition (indices follow MediaPipe 33-landmark spec)
-      const BONES = [
-        [0, 1],
-        [1, 2],
-        [2, 3],
-        [3, 7],
-        [0, 4],
-        [4, 5],
-        [5, 6],
-        [6, 8],
-        [9, 10],
-        [11, 12],
-        [12, 14],
-        [14, 16],
-        [11, 13],
-        [13, 15],
-        [11, 23],
-        [12, 24],
-        [23, 24],
-        [24, 26],
-        [26, 28],
-        [23, 25],
-        [25, 27],
-        [28, 32],
-        [27, 31],
-      ];
+      const hemi = new THREE.HemisphereLight(0xffffff,0x444444,1.2);
+      hemi.position.set(0,2,0);
+      scene.add(hemi);
 
-      // Three.js lines for bones
-      const boneMat = new THREE.LineBasicMaterial({ color: 0x00ff90 });
-      const boneGeo = new THREE.BufferGeometry();
-      boneGeo.setAttribute(
-        "position",
-        new THREE.BufferAttribute(new Float32Array(BONES.length * 2 * 3), 3)
-      );
-      const skeletonLines = new THREE.LineSegments(boneGeo, boneMat);
-      scene.add(skeletonLines);
+      // axes helper (debug)
+      //scene.add(new THREE.AxesHelper(1));
 
-      // ---------- 3. Pose landmarker ----------
+      // bone list (MediaPipe 33‑landmark)
+      const BONES=[[0,1],[1,2],[2,3],[3,7],[0,4],[4,5],[5,6],[6,8],[9,10],[11,12],[12,14],[14,16],[11,13],[13,15],[11,23],[12,24],[23,24],[24,26],[26,28],[23,25],[25,27],[28,32],[27,31]];
+      const bonePos=new Float32Array(BONES.length*2*3);
+      const geo=new THREE.BufferGeometry();
+      geo.setAttribute('position',new THREE.BufferAttribute(bonePos,3));
+      const mat=new THREE.LineBasicMaterial({color:0x00ff90});
+      const skeleton=new THREE.LineSegments(geo,mat);
+      scene.add(skeleton);
+
+      //------------------------------
+      // 3. One Euro Filter class
+      //------------------------------
+      class OneEuro{constructor(f0=1.7,beta=0.3){this.f0=f0;this.beta=beta;this.t=-1;this.prev=null;this.prevDeriv=0;}alpha(cutoff,dt){const tau=1/(2*Math.PI*cutoff);return 1/(1+tau/dt);}filter(v,t){if(this.t<0){this.t=t;this.prev=v;return v;}const dt=(t-this.t)||1/60;const deriv=(v-this.prev)/dt;const edAlpha=this.alpha(this.f0,dt);const derivHat=edAlpha*deriv+(1-edAlpha)*this.prevDeriv;const cutoff=this.f0+this.beta*Math.abs(derivHat);const a=this.alpha(cutoff,dt);const x=a*v+(1-a)*this.prev;this.prevDeriv=derivHat;this.prev=x;this.t=t;return x;}}
+      const filters=Array.from({length:33*3},()=>new OneEuro());
+
+      //------------------------------
+      // 4. Pose Landmarker
+      //------------------------------
       let landmarker;
-      let targetBoneLengths = null;
-
-      async function initLandmarker() {
-        const fileset = await FilesetResolver.forVisionTasks(
-          "https://cdn.jsdelivr.net/npm/@mediapipe/cdn@0.1.0/"
-        );
-        landmarker = await PoseLandmarker.createFromOptions(fileset, {
-          baseOptions: {
-            modelAssetPath:
-              "https://storage.googleapis.com/mediapipe-tasks/pose_landmarker/heavy/pose_landmarker.task",
-          },
-          runningMode: "VIDEO",
-          numPoses: 1,
-          outputSegmentationMasks: false,
-          minTrackingConfidence: 0.3,
-          minPosePresenceConfidence: 0.3,
-          minDetectionConfidence: 0.3,
-        });
-        requestAnimationFrame(loop);
-      }
-
-      function fitBoneLengths(landmarks) {
-        // Compute once – store desired lengths between bone endpoints
-        targetBoneLengths = BONES.map(([a, b]) => {
-          const va = landmarks[a];
-          const vb = landmarks[b];
-          return Math.hypot(va.x - vb.x, va.y - vb.y, va.z - vb.z);
+      let baseBoneLengths=null;
+      async function initLandmarker(){
+        const fs=await FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm');
+        landmarker=await PoseLandmarker.createFromOptions(fs,{
+          baseOptions:{modelAssetPath:'https://storage.googleapis.com/mediapipe-tasks/pose_landmarker/heavy/pose_landmarker.task'},
+          runningMode:'VIDEO',
+          numPoses:1,
+          outputSegmentationMasks:false,
+          minTrackingConfidence:0.3,
+          minPoseDetectionConfidence:0.3,
+          minPosePresenceConfidence:0.3,
         });
       }
 
-      function applyIK(landmarks) {
-        // Very light IK: scale each bone direction to first-frame length
-        const out = landmarks.map((l) => ({ ...l })); // deep copy
-        BONES.forEach(([a, b], idx) => {
-          const va = out[a];
-          const vb = out[b];
-          let dir = {
-            x: vb.x - va.x,
-            y: vb.y - va.y,
-            z: vb.z - va.z,
-          };
-          const len = Math.hypot(dir.x, dir.y, dir.z) + 1e-9;
-          const scale = targetBoneLengths[idx] / len;
-          dir = { x: dir.x * scale, y: dir.y * scale, z: dir.z * scale };
-          // Move child only (keep parent)
-          vb.x = va.x + dir.x;
-          vb.y = va.y + dir.y;
-          vb.z = va.z + dir.z;
+      function storeBoneLengths(lm){
+        baseBoneLengths=BONES.map(([a,b])=>{
+          const pa=lm[a],pb=lm[b];
+          return Math.hypot(pa.x-pb.x,pa.y-pb.y,pa.z-pb.z);
+        });
+      }
+
+      function applyLightIK(lm){
+        const out=lm.map(p=>({...p}));
+        BONES.forEach(([a,b],i)=>{
+          const pa=out[a],pb=out[b];
+          const dx=pb.x-pa.x,dy=pb.y-pa.y,dz=pb.z-pa.z;
+          const len=Math.hypot(dx,dy,dz)||1e-9;
+          const s=baseBoneLengths[i]/len;
+          pb.x=pa.x+dx*s;pb.y=pa.y+dy*s;pb.z=pa.z+dz*s;
         });
         return out;
       }
 
-      // simple 1‑Euro filter per coordinate
-      class OneEuro {
-        constructor(f0 = 1.7, beta = 0.3) {
-          this.f0 = f0;
-          this.beta = beta;
-          this.prevVal = null;
-          this.prevDeriv = 0;
-          this.prevTime = null;
-        }
-        alpha(cutoff, dt) {
-          const tau = 1 / (2 * Math.PI * cutoff);
-          return 1 / (1 + tau / dt);
-        }
-        filter(val, t) {
-          if (this.prevVal == null) {
-            this.prevVal = val;
-            this.prevTime = t;
-            return val;
-          }
-          const dt = t - this.prevTime;
-          const deriv = (val - this.prevVal) / dt;
-          const edAlpha = this.alpha(this.f0, dt);
-          const derivHat = edAlpha * deriv + (1 - edAlpha) * this.prevDeriv;
-          const cutoff = this.f0 + this.beta * Math.abs(derivHat);
-          const alpha = this.alpha(cutoff, dt);
-          const smoothed = alpha * val + (1 - alpha) * this.prevVal;
-          this.prevVal = smoothed;
-          this.prevDeriv = derivHat;
-          this.prevTime = t;
-          return smoothed;
-        }
-      }
-      const filters = Array.from({ length: 33 * 3 }, () => new OneEuro());
-
-      function smoothLandmarks(lm, t) {
-        const flat = [];
-        lm.forEach((p) => flat.push(p.x, p.y, p.z));
-        const smooth = flat.map((v, i) => filters[i].filter(v, t));
-        return smooth.reduce((arr, _, i) => {
-          if (i % 3 === 0) arr.push({});
-          const idx = Math.floor(i / 3);
-          const key = ["x", "y", "z"][i % 3];
-          arr[idx][key] = smooth[i];
+      function smoothLandmarks(lm,t){
+        const flat=[];lm.forEach(p=>flat.push(p.x,p.y,p.z));
+        const sm=flat.map((v,i)=>filters[i].filter(v,t));
+        return sm.reduce((arr,v,i)=>{
+          const idx=Math.floor(i/3);
+          if(!arr[idx])arr[idx]={};
+          const key=['x','y','z'][i%3];
+          arr[idx][key]=v;
           return arr;
-        }, []);
+        },[]);
       }
 
-      function updateSkeleton(landmarks) {
-        const posAttr = boneGeo.attributes.position;
-        BONES.forEach(([a, b], idx) => {
-          const va = landmarks[a];
-          const vb = landmarks[b];
-          posAttr.setXYZ(idx * 2, va.x, -va.y, -va.z);
-          posAttr.setXYZ(idx * 2 + 1, vb.x, -vb.y, -vb.z);
+      function updateSkeleton(lm){
+        const posAttr=geo.attributes.position;
+        BONES.forEach(([a,b],i)=>{
+          const pa=lm[a],pb=lm[b];
+          // amplify scale for visibility (×3)
+          posAttr.setXYZ(i*2,  pa.x*3,  -pa.y*3,  -pa.z*3);
+          posAttr.setXYZ(i*2+1,pb.x*3, -pb.y*3, -pb.z*3);
         });
-        posAttr.needsUpdate = true;
+        posAttr.needsUpdate=true;
       }
 
-      async function loop(time) {
-        if (landmarker && video.readyState === 4) {
-          const res = landmarker.detectForVideo(video, time);
-          if (res.landmarks && res.landmarks.length > 0) {
-            let lms = res.worldLandmarks[0];
-            if (!targetBoneLengths) fitBoneLengths(lms);
-            lms = applyIK(lms);
-            lms = smoothLandmarks(lms, time / 1000);
-            updateSkeleton(lms);
+      //------------------------------
+      // 5. Main loop
+      //------------------------------
+      async function main(){
+        await initCam();
+        await initLandmarker();
+        requestAnimationFrame(render);
+      }
+
+      function render(t){
+        if(landmarker){
+          const res=landmarker.detectForVideo(video,t);
+          if(res.worldLandmarks&&res.worldLandmarks.length){
+            let lm=res.worldLandmarks[0];
+            if(!baseBoneLengths)storeBoneLengths(lm);
+            lm=applyLightIK(lm);
+            lm=smoothLandmarks(lm,t/1000);
+            updateSkeleton(lm);
+            warn('');
+          } else {
+            warn('No pose detected');
           }
         }
-        renderer.render(scene, camera);
-        requestAnimationFrame(loop);
+        renderer.render(scene,cam);
+        requestAnimationFrame(render);
       }
 
-      initLandmarker();
+      main();
     </script>
   </body>
 </html>
