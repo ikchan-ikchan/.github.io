@@ -1,169 +1,227 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
   <head>
-    <meta charset="UTF-8">
-    <title>MediaPipe Pose: カメラ選択, FPS, 解像度指定デモ（解像度更新版）</title>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MediaPipe Pose 3‑D + Light IK Demo</title>
     <style>
-      body { font-family: sans-serif; text-align: center; }
-      video, canvas { display: block; margin: 10px auto; }
-      #controls { margin: 10px; }
-      #maxResolutionInfo { margin-top: 5px; font-size: 0.9em; color: #555; }
+      body {
+        margin: 0;
+        font-family: system-ui, sans-serif;
+        display: grid;
+        place-items: center;
+        gap: 1rem;
+        background: #111;
+        color: #eee;
+      }
+      #video,
+      #threeCanvas {
+        border-radius: 1rem;
+        box-shadow: 0 0 15px rgba(0, 0, 0, 0.8);
+      }
     </style>
   </head>
   <body>
-    <h2>MediaPipe Pose: カメラ選択, FPS, 解像度指定デモ</h2>
-    <div id="controls">
-      <label for="cameraSelect">カメラ選択:</label>
-      <select id="cameraSelect"></select>
-      &nbsp;&nbsp;
-      <label for="frameRateInput">フレームレート (fps):</label>
-      <input type="number" id="frameRateInput" min="1" value="15" style="width:60px;">
-      &nbsp;&nbsp;
-      <label for="resPercentInput">解像度 (%):</label>
-      <input type="number" id="resPercentInput" min="1" max="100" value="100" style="width:60px;">
-      &nbsp;&nbsp;
-      <button id="startButton">開始</button>
-      <div id="maxResolutionInfo"></div>
-    </div>
-    
-    <!-- カメラ映像（内部利用：Canvas に描画） -->
-    <video id="video" autoplay muted playsinline style="display:none;"></video>
-    <!-- 描画用キャンバス -->
-    <canvas id="outputCanvas"></canvas>
-    
-    <!-- MediaPipe Pose と Drawing Utils の読み込み -->
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
-    
-    <script>
-      const video = document.getElementById('video');
-      const outputCanvas = document.getElementById('outputCanvas');
-      const canvasCtx = outputCanvas.getContext('2d');
-      const cameraSelect = document.getElementById('cameraSelect');
-      const frameRateInput = document.getElementById('frameRateInput');
-      const resPercentInput = document.getElementById('resPercentInput');
-      const startButton = document.getElementById('startButton');
-      const maxResolutionInfo = document.getElementById('maxResolutionInfo');
-      
-      let pose = null;
-      
-      // ① 利用可能なカメラを列挙する
-      async function enumerateCameras() {
-        try {
-          const devices = await navigator.mediaDevices.enumerateDevices();
-          const videoDevices = devices.filter(device => device.kind === 'videoinput');
-          cameraSelect.innerHTML = '';
-          videoDevices.forEach((device, index) => {
-            const option = document.createElement('option');
-            option.value = device.deviceId;
-            option.text = device.label || `カメラ ${index + 1}`;
-            cameraSelect.appendChild(option);
-          });
-        } catch (error) {
-          console.error('カメラの列挙に失敗:', error);
-        }
-      }
-      
-      // ② MediaPipe Pose の初期化
-      function initializePose() {
-        pose = new Pose({
-          locateFile: (file) => {
-            return `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`;
-          }
-        });
-        pose.setOptions({
-          modelComplexity: 1,
-          smoothLandmarks: true,
-          minDetectionConfidence: 0.5,
-          minTrackingConfidence: 0.5
-        });
-        pose.onResults(onResults);
-      }
-      
-      // ③ 結果を Canvas に描画するコールバック
-      function onResults(results) {
-        canvasCtx.save();
-        canvasCtx.clearRect(0, 0, outputCanvas.width, outputCanvas.height);
-        canvasCtx.drawImage(results.image, 0, 0, outputCanvas.width, outputCanvas.height);
-        if (results.poseLandmarks) {
-          drawConnectors(canvasCtx, results.poseLandmarks, Pose.POSE_CONNECTIONS, { color: 'lime', lineWidth: 2 });
-          drawLandmarks(canvasCtx, results.poseLandmarks, { color: 'red', lineWidth: 1 });
-        }
-        canvasCtx.restore();
-      }
-      
-      // ④ 選択したカメラで、最大解像度の何％かを指定して映像を取得する
-      async function startCamera() {
-        const selectedDeviceId = cameraSelect.value;
-        // まずは制約なしでストリームを取得して capabilities を調べる
-        const tempConstraints = { video: { deviceId: { exact: selectedDeviceId } } };
-        let tempStream;
-        try {
-          tempStream = await navigator.mediaDevices.getUserMedia(tempConstraints);
-        } catch (error) {
-          console.error('初回ストリームの取得に失敗:', error);
-          return;
-        }
-        
-        const videoTrack = tempStream.getVideoTracks()[0];
-        const capabilities = videoTrack.getCapabilities();
-        let maxWidth = (capabilities.width && capabilities.width.max) || 640;
-        let maxHeight = (capabilities.height && capabilities.height.max) || 480;
-        maxResolutionInfo.innerText = `このカメラの最大解像度: ${maxWidth} x ${maxHeight}`;
-        tempStream.getTracks().forEach(track => track.stop());
-        
-        const resPercent = parseInt(resPercentInput.value) || 100;
-        const desiredWidth = Math.floor(maxWidth * (resPercent / 100));
-        const desiredHeight = Math.floor(maxHeight * (resPercent / 100));
-        const frameRate = parseInt(frameRateInput.value) || 15;
-        
-        // 下記では「exact」を使って厳密に解像度指定（変更可能な場合のみ反映されます）
-        const constraints = {
-          video: {
-            deviceId: { exact: selectedDeviceId },
-            width: { exact: desiredWidth },
-            height: { exact: desiredHeight },
-            frameRate: { ideal: frameRate }
-          }
-        };
-        try {
-          const stream = await navigator.mediaDevices.getUserMedia(constraints);
-          video.srcObject = stream;
-          return new Promise(resolve => {
-            video.onloadedmetadata = () => {
-              // 取得した解像度に合わせてキャンバスサイズも更新
-              outputCanvas.width = video.videoWidth;
-              outputCanvas.height = video.videoHeight;
-              video.play();
-              resolve();
-            };
-          });
-        } catch (error) {
-          console.error('カメラ映像の取得に失敗:', error);
-        }
-      }
-      
-      // ⑤ 映像フレームを MediaPipe Pose に送信するループ
-      async function processVideo() {
-        const frameRate = parseInt(frameRateInput.value) || 15;
-        const interval = 1000 / frameRate;
-        async function sendFrame() {
-          if (!video.paused && !video.ended) {
-            await pose.send({ image: video });
-          }
-          setTimeout(sendFrame, interval);
-        }
-        sendFrame();
-      }
-      
-      // ⑥ スタートボタン押下時の処理
-      startButton.addEventListener('click', async () => {
-        await startCamera();
-        initializePose();
-        processVideo();
+    <video id="video" width="480" height="360" autoplay muted playsinline></video>
+    <canvas id="threeCanvas" width="480" height="360"></canvas>
+
+    <!-- Three.js -->
+    <script src="https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.min.js"></script>
+    <!-- MediaPipe Tasks Vision -->
+    <script type="module">
+      import {
+        FilesetResolver,
+        PoseLandmarker,
+      } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0";
+
+      // ---------- 1. Camera setup ----------
+      const video = document.getElementById("video");
+      const constraints = { video: { facingMode: "user" } };
+      navigator.mediaDevices.getUserMedia(constraints).then((stream) => {
+        video.srcObject = stream;
       });
-      
-      enumerateCameras();
+
+      // ---------- 2. Three.js scene ----------
+      const canvas = document.getElementById("threeCanvas");
+      const renderer = new THREE.WebGLRenderer({ canvas, alpha: true });
+      renderer.setSize(canvas.width, canvas.height);
+      const scene = new THREE.Scene();
+      const camera = new THREE.PerspectiveCamera(
+        45,
+        canvas.width / canvas.height,
+        0.1,
+        10
+      );
+      camera.position.set(0, 1.2, 2.2);
+      const light = new THREE.DirectionalLight(0xffffff, 1.5);
+      light.position.set(0, 2, 2);
+      scene.add(light);
+
+      // Skeleton definition (indices follow MediaPipe 33-landmark spec)
+      const BONES = [
+        [0, 1],
+        [1, 2],
+        [2, 3],
+        [3, 7],
+        [0, 4],
+        [4, 5],
+        [5, 6],
+        [6, 8],
+        [9, 10],
+        [11, 12],
+        [12, 14],
+        [14, 16],
+        [11, 13],
+        [13, 15],
+        [11, 23],
+        [12, 24],
+        [23, 24],
+        [24, 26],
+        [26, 28],
+        [23, 25],
+        [25, 27],
+        [28, 32],
+        [27, 31],
+      ];
+
+      // Three.js lines for bones
+      const boneMat = new THREE.LineBasicMaterial({ color: 0x00ff90 });
+      const boneGeo = new THREE.BufferGeometry();
+      boneGeo.setAttribute(
+        "position",
+        new THREE.BufferAttribute(new Float32Array(BONES.length * 2 * 3), 3)
+      );
+      const skeletonLines = new THREE.LineSegments(boneGeo, boneMat);
+      scene.add(skeletonLines);
+
+      // ---------- 3. Pose landmarker ----------
+      let landmarker;
+      let targetBoneLengths = null;
+
+      async function initLandmarker() {
+        const fileset = await FilesetResolver.forVisionTasks(
+          "https://cdn.jsdelivr.net/npm/@mediapipe/cdn@0.1.0/"
+        );
+        landmarker = await PoseLandmarker.createFromOptions(fileset, {
+          baseOptions: {
+            modelAssetPath:
+              "https://storage.googleapis.com/mediapipe-tasks/pose_landmarker/heavy/pose_landmarker.task",
+          },
+          runningMode: "VIDEO",
+          numPoses: 1,
+          outputSegmentationMasks: false,
+          minTrackingConfidence: 0.3,
+          minPosePresenceConfidence: 0.3,
+          minDetectionConfidence: 0.3,
+        });
+        requestAnimationFrame(loop);
+      }
+
+      function fitBoneLengths(landmarks) {
+        // Compute once – store desired lengths between bone endpoints
+        targetBoneLengths = BONES.map(([a, b]) => {
+          const va = landmarks[a];
+          const vb = landmarks[b];
+          return Math.hypot(va.x - vb.x, va.y - vb.y, va.z - vb.z);
+        });
+      }
+
+      function applyIK(landmarks) {
+        // Very light IK: scale each bone direction to first-frame length
+        const out = landmarks.map((l) => ({ ...l })); // deep copy
+        BONES.forEach(([a, b], idx) => {
+          const va = out[a];
+          const vb = out[b];
+          let dir = {
+            x: vb.x - va.x,
+            y: vb.y - va.y,
+            z: vb.z - va.z,
+          };
+          const len = Math.hypot(dir.x, dir.y, dir.z) + 1e-9;
+          const scale = targetBoneLengths[idx] / len;
+          dir = { x: dir.x * scale, y: dir.y * scale, z: dir.z * scale };
+          // Move child only (keep parent)
+          vb.x = va.x + dir.x;
+          vb.y = va.y + dir.y;
+          vb.z = va.z + dir.z;
+        });
+        return out;
+      }
+
+      // simple 1‑Euro filter per coordinate
+      class OneEuro {
+        constructor(f0 = 1.7, beta = 0.3) {
+          this.f0 = f0;
+          this.beta = beta;
+          this.prevVal = null;
+          this.prevDeriv = 0;
+          this.prevTime = null;
+        }
+        alpha(cutoff, dt) {
+          const tau = 1 / (2 * Math.PI * cutoff);
+          return 1 / (1 + tau / dt);
+        }
+        filter(val, t) {
+          if (this.prevVal == null) {
+            this.prevVal = val;
+            this.prevTime = t;
+            return val;
+          }
+          const dt = t - this.prevTime;
+          const deriv = (val - this.prevVal) / dt;
+          const edAlpha = this.alpha(this.f0, dt);
+          const derivHat = edAlpha * deriv + (1 - edAlpha) * this.prevDeriv;
+          const cutoff = this.f0 + this.beta * Math.abs(derivHat);
+          const alpha = this.alpha(cutoff, dt);
+          const smoothed = alpha * val + (1 - alpha) * this.prevVal;
+          this.prevVal = smoothed;
+          this.prevDeriv = derivHat;
+          this.prevTime = t;
+          return smoothed;
+        }
+      }
+      const filters = Array.from({ length: 33 * 3 }, () => new OneEuro());
+
+      function smoothLandmarks(lm, t) {
+        const flat = [];
+        lm.forEach((p) => flat.push(p.x, p.y, p.z));
+        const smooth = flat.map((v, i) => filters[i].filter(v, t));
+        return smooth.reduce((arr, _, i) => {
+          if (i % 3 === 0) arr.push({});
+          const idx = Math.floor(i / 3);
+          const key = ["x", "y", "z"][i % 3];
+          arr[idx][key] = smooth[i];
+          return arr;
+        }, []);
+      }
+
+      function updateSkeleton(landmarks) {
+        const posAttr = boneGeo.attributes.position;
+        BONES.forEach(([a, b], idx) => {
+          const va = landmarks[a];
+          const vb = landmarks[b];
+          posAttr.setXYZ(idx * 2, va.x, -va.y, -va.z);
+          posAttr.setXYZ(idx * 2 + 1, vb.x, -vb.y, -vb.z);
+        });
+        posAttr.needsUpdate = true;
+      }
+
+      async function loop(time) {
+        if (landmarker && video.readyState === 4) {
+          const res = landmarker.detectForVideo(video, time);
+          if (res.landmarks && res.landmarks.length > 0) {
+            let lms = res.worldLandmarks[0];
+            if (!targetBoneLengths) fitBoneLengths(lms);
+            lms = applyIK(lms);
+            lms = smoothLandmarks(lms, time / 1000);
+            updateSkeleton(lms);
+          }
+        }
+        renderer.render(scene, camera);
+        requestAnimationFrame(loop);
+      }
+
+      initLandmarker();
     </script>
   </body>
 </html>
