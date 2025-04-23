@@ -1,112 +1,235 @@
 <!DOCTYPE html>
-<html lang="ja">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>3D Skeleton with MediaPipe Pose</title>
-  <style>
-    body { font-family: sans-serif; text-align: center; margin: 0; padding: 0; }
-    #cameraSelect { margin: 10px; }
-    #video, #threeCanvas { display: block; margin: auto; }
-    #video { width: 640px; height: 480px; }
-    #threeCanvas { width: 640px; height: 480px; }
-  </style>
-</head>
-<body>
-  <h2>カメラ選択</h2>
-  <select id="cameraSelect"></select>
-  <video id="video" autoplay muted playsinline></video>
-  <canvas id="threeCanvas"></canvas>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>MediaPipe 3D Skeleton + IK Demo</title>
+    <style>
+      body {
+        font-family: sans-serif;
+        text-align: center;
+      }
+      video,
+      canvas {
+        display: block;
+        margin: 10px auto;
+      }
+      #threeCanvas {
+        width: 640px;
+        height: 480px;
+      }
+    </style>
+  </head>
+  <body>
+    <h2>MediaPipe Pose + 3D 骨長フィッティング ＋ 平滑化デモ</h2>
+    <video
+      id="video"
+      autoplay
+      muted
+      playsinline
+      style="display:none"
+    ></video>
+    <canvas id="outputCanvas"></canvas>
+    <canvas id="threeCanvas"></canvas>
 
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
-  <script type="module">
-    import {Pose} from 'https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js';
-    // Camera is provided globally by camera_utils.js
-    // import {Camera} is not needed
-    import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.150.1/build/three.module.js';
+    <!-- MediaPipe Pose -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+    <!-- Three.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
 
-    const videoElement = document.getElementById('video');
-    const canvasElement = document.getElementById('threeCanvas');
+    <script>
+      // ---- HTML エレメント ----
+      const video = document.getElementById("video");
+      const outputCanvas = document.getElementById("outputCanvas");
+      const ctx2d = outputCanvas.getContext("2d");
+      const threeCanvas = document.getElementById("threeCanvas");
 
-    // Three.js セットアップ
-    const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(75, 640/480, 0.1, 1000);
-    camera.position.set(0, 200, 500);
-    const renderer = new THREE.WebGLRenderer({ canvas: canvasElement, antialias: true });
-    renderer.setSize(640, 480);
+      // ---- Three.js シーンセットアップ ----
+      const scene = new THREE.Scene();
+      const camera = new THREE.PerspectiveCamera(
+        45,
+        threeCanvas.clientWidth / threeCanvas.clientHeight,
+        0.1,
+        1000
+      );
+      camera.position.set(0, 200, 400);
+      const renderer = new THREE.WebGLRenderer({ canvas: threeCanvas });
+      renderer.setSize(
+        threeCanvas.clientWidth,
+        threeCanvas.clientHeight
+      );
+      // ライト
+      const light = new THREE.DirectionalLight(0xffffff, 1);
+      light.position.set(0, 200, 100).normalize();
+      scene.add(light);
 
-    // 連結リスト（MediaPipe 33点）
-    const connections = [
-      [0,1],[1,2],[2,3],[3,7],      // 体幹
-      [0,4],[4,5],[5,6],[6,8],      // 体幹他側
-      [9,10],[11,12],[11,13],[13,15],[15,17],[12,14],[14,16],[16,18], // 手足
-      [19,20],[21,22],[23,24],[25,26],[27,28],[29,30],[31,32] // フェイスなし簡易
-    ];
+      // ボーン接続リスト (Mediapipe の 33 点から代表 24 本)
+      const POSE_CONNECTIONS = [
+        [0, 1], [1, 2], [2, 3], [3, 7],
+        [0, 4], [4, 5], [5, 6], [6, 8],
+        [9,10],[11,12],[11,13],[13,15],
+        [12,14],[14,16],[15,17],[16,18],
+        [11,23],[12,24],[23,24],[23,25],
+        [24,26],[25,27],[26,28]
+      ];
 
-    // 線ジオメトリ初期化
-    const bones = connections.map(() => {
-      const material = new THREE.LineBasicMaterial({ color: 0x00ff00 });
-      const points = [new THREE.Vector3(), new THREE.Vector3()];
-      const geometry = new THREE.BufferGeometry().setFromPoints(points);
-      const line = new THREE.Line(geometry, material);
-      scene.add(line);
-      return line;
-    });
-
-    // MediaPipe Pose 初期化
-    const pose = new Pose({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`});
-    pose.setOptions({
-      modelComplexity: 1,
-      smoothLandmarks: true,
-      enableSegmentation: false,
-      smoothSegmentation: false,
-      minDetectionConfidence: 0.5,
-      minTrackingConfidence: 0.5
-    });
-    pose.onResults(onResults);
-
-    let mpCamera;
-    function startCamera(deviceId) {
-      if (mpCamera) mpCamera.stop();
-      mpCamera = new Camera(videoElement, {
-        onFrame: async () => await pose.send({image: videoElement}),
-        width: 640,
-        height: 480,
-        deviceId: deviceId
+      // Three.js で線オブジェクトを用意
+      const boneLines = [];
+      POSE_CONNECTIONS.forEach(() => {
+        const mat = new THREE.LineBasicMaterial({ color: 0x00ff00 });
+        const geom = new THREE.BufferGeometry().setFromPoints([
+          new THREE.Vector3(),
+          new THREE.Vector3()
+        ]);
+        const line = new THREE.Line(geom, mat);
+        scene.add(line);
+        boneLines.push(line);
       });
-      mpCamera.start();
-    }
 
-    // カメラデバイス一覧取得
-    navigator.mediaDevices.enumerateDevices().then(devices => {
-      const videoInputs = devices.filter(d => d.kind === 'videoinput');
-      const select = document.getElementById('cameraSelect');
-      videoInputs.forEach(device => {
-        const opt = document.createElement('option');
-        opt.value = device.deviceId;
-        opt.text = device.label || `Camera ${select.length+1}`;
-        select.appendChild(opt);
-      });
-      select.onchange = () => startCamera(select.value);
-      if (videoInputs.length) startCamera(videoInputs[0].deviceId);
-    });
+      // ---- 状態変数 ----
+      let initialBoneLengths = null; // [[parentIdx, childIdx, length],...]
+      let prevSmoothed = []; // jointごとの smoothed ポジション
+      const smoothAlpha = 0.7; // 平滑化係数（小さくするほど滑らか）
 
-    // 結果コールバック
-    function onResults(results) {
-      if (!results.worldLandmarks) return;
-      const landmarks = results.worldLandmarks;
-      // 各線分を更新
-      connections.forEach((pair, i) => {
-        const [a,b] = pair;
-        const pA = landmarks[a], pB = landmarks[b];
-        const line = bones[i];
-        const positions = line.geometry.attributes.position.array;
-        positions[0] = pA.x * 500; positions[1] = pA.y * 500; positions[2] = -pA.z * 500;
-        positions[3] = pB.x * 500; positions[4] = pB.y * 500; positions[5] = -pB.z * 500;
-        line.geometry.attributes.position.needsUpdate = true;
+      // ---- MediaPipe Pose の初期化 ----
+      const pose = new Pose({
+        locateFile: (file) =>
+          `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`,
       });
-      renderer.render(scene, camera);
-    }
-  </script>
-</body>
+      pose.setOptions({
+        modelComplexity: 1,
+        smoothLandmarks: true,
+        minDetectionConfidence: 0.5,
+        minTrackingConfidence: 0.5,
+      });
+      pose.onResults(onResults);
+
+      // カメラ開始
+      async function startCamera() {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: 640, height: 480 },
+        });
+        video.srcObject = stream;
+        await new Promise((r) => (video.onloadedmetadata = r));
+        outputCanvas.width = video.videoWidth;
+        outputCanvas.height = video.videoHeight;
+      }
+
+      // 1フレーム処理
+      async function onResults(results) {
+        // 2D 描画
+        ctx2d.save();
+        ctx2d.clearRect(0, 0, outputCanvas.width, outputCanvas.height);
+        ctx2d.drawImage(
+          results.image,
+          0,
+          0,
+          outputCanvas.width,
+          outputCanvas.height
+        );
+        if (results.poseLandmarks) {
+          drawConnectors(
+            ctx2d,
+            results.poseLandmarks,
+            POSE_CONNECTIONS,
+            { color: "lime", lineWidth: 2 }
+          );
+          drawLandmarks(ctx2d, results.poseLandmarks, {
+            color: "red",
+            lineWidth: 1,
+          });
+        }
+        ctx2d.restore();
+
+        // worldLandmarks (meters 単位)
+        const w = results.worldLandmarks;
+        if (!w) return;
+
+        // 初期フレームで骨長を計算
+        if (!initialBoneLengths) {
+          initialBoneLengths = POSE_CONNECTIONS.map(([p, c]) => {
+            const a = new THREE.Vector3(
+              w[p].x,
+              w[p].y * -1,
+              w[p].z * -1
+            );
+            const b = new THREE.Vector3(
+              w[c].x,
+              w[c].y * -1,
+              w[c].z * -1
+            );
+            return [p, c, a.distanceTo(b)];
+          });
+          // 初期 prevSmoothed を設定
+          prevSmoothed = w.map((lm) =>
+            new THREE.Vector3(
+              lm.x,
+              lm.y * -1,
+              lm.z * -1
+            )
+          );
+        }
+
+        // ボーン長フィッティング＋平滑化
+        const smoothed = prevSmoothed.map((v) => v.clone());
+        // まず rawPositions を取り込む
+        const raw = w.map((lm) =>
+          new THREE.Vector3(
+            lm.x,
+            lm.y * -1,
+            lm.z * -1
+          )
+        );
+        // ボーンごとに長さを固定
+        initialBoneLengths.forEach(([p, c, L]) => {
+          const parent = smoothed[p];
+          const dir = raw[c].clone().sub(raw[p]).normalize();
+          const fitted = parent.clone().add(dir.multiplyScalar(L));
+          smoothed[c].copy(
+            fitted.lerp(prevSmoothed[c], 1 - smoothAlpha)
+          );
+        });
+        // 根元（0）だけ平滑化
+        smoothed[0].copy(
+          raw[0].clone().lerp(prevSmoothed[0], 1 - smoothAlpha)
+        );
+
+        // Three.js のライン更新
+        boneLines.forEach((line, idx) => {
+          const [p, c] = POSE_CONNECTIONS[idx];
+          const pa = smoothed[p]
+            .clone()
+            .multiplyScalar(100); // m→cm スケーリング
+          const cb = smoothed[c].clone().multiplyScalar(100);
+          const posArr = new Float32Array([
+            pa.x, pa.y, pa.z,
+            cb.x, cb.y, cb.z,
+          ]);
+          line.geometry.setAttribute(
+            "position",
+            new THREE.BufferAttribute(posArr, 3)
+          );
+          line.geometry.attributes.position.needsUpdate = true;
+        });
+
+        // 次フレーム用に保存
+        prevSmoothed = smoothed;
+
+        // レンダリング
+        renderer.render(scene, camera);
+      }
+
+      // メインループ
+      async function run() {
+        await startCamera();
+        async function frameLoop() {
+          await pose.send({ image: video });
+          requestAnimationFrame(frameLoop);
+        }
+        frameLoop();
+      }
+
+      run();
+    </script>
+  </body>
 </html>
