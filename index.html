@@ -18,9 +18,11 @@
   <video id="video" autoplay muted playsinline></video>
   <canvas id="threeCanvas"></canvas>
 
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
   <script type="module">
     import {Pose} from 'https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js';
-    import {Camera} from 'https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js';
+    // Camera is provided globally by camera_utils.js
+    // import {Camera} is not needed
     import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.150.1/build/three.module.js';
 
     const videoElement = document.getElementById('video');
