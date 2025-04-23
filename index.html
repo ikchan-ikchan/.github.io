@@ -1,81 +1,86 @@
 <!DOCTYPE html>
-<html>
-  <head>
-    <meta charset="UTF-8">
-    <title>MediaPipe Pose: 動画ファイルを使ったポイント描画デモ</title>
-    <style>
-      body { font-family: sans-serif; text-align: center; }
-      #controls { margin: 10px; }
-      video, canvas { display: block; margin: 10px auto; }
-    </style>
-  </head>
-  <body>
-    <h2>MediaPipe Pose: 動画ファイルを使ったポイント描画デモ</h2>
-    <div id="controls">
-      <input type="file" id="videoFileInput" accept="video/*">
-    </div>
-    <!-- 非表示の video 要素で動画を再生 -->
-    <video id="video" autoplay muted playsinline style="display:none;"></video>
-    <!-- 描画用キャンバス -->
-    <canvas id="outputCanvas"></canvas>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>骨格推定 P2P デモ</title>
+  <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
+  <style>
+    body { font-family: sans-serif; text-align: center; }
+    video { width: 45%; margin: 0 2%; background: #000; }
+    #controls { margin: 1em; }
+  </style>
+</head>
+<body>
+  <h1>骨格推定 P2P デモ</h1>
+  <div id="controls">
+    <label><input type="radio" name="role" value="compute"> 計算</label>
+    <label><input type="radio" name="role" value="user"> ユーザー</label>
+    <button id="startBtn">開始</button>
+  </div>
 
-    <!-- MediaPipe Pose と Drawing Utils の読み込み -->
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
-    <script>
-      const videoFileInput = document.getElementById('videoFileInput');
-      const video = document.getElementById('video');
-      const canvas = document.getElementById('outputCanvas');
-      const ctx = canvas.getContext('2d');
-      
-      // MediaPipe Pose の初期化
-      const pose = new Pose({
-        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
-      });
-      pose.setOptions({
-        modelComplexity: 1,
-        smoothLandmarks: true,
-        minDetectionConfidence: 0.5,
-        minTrackingConfidence: 0.5
-      });
-      pose.onResults(onResults);
+  <p>あなたの PeerID: <span id="myId">—</span></p>
+  <p>相手の PeerID: <input type="text" id="peerIdInput" placeholder="相手のID"></p>
+  <button id="callBtn">接続する</button>
 
-      // 検出結果を Canvas に描画
-      function onResults(results) {
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
-        if (results.poseLandmarks) {
-          // ランドマーク（点）のみ描画
-          drawLandmarks(ctx, results.poseLandmarks, {color: 'red', radius: 5});
-        }
+  <div>
+    <video id="localVideo" autoplay muted></video>
+    <video id="remoteVideo" autoplay></video>
+  </div>
+
+  <script>
+    const myIdSpan = document.getElementById('myId');
+    const localV = document.getElementById('localVideo');
+    const remoteV = document.getElementById('remoteVideo');
+    const startBtn = document.getElementById('startBtn');
+    const callBtn  = document.getElementById('callBtn');
+    const peerIdIn = document.getElementById('peerIdInput');
+
+    let role, peer, localStream;
+
+    startBtn.onclick = async () => {
+      role = document.querySelector('input[name=role]:checked')?.value;
+      if (!role) return alert('まず役割を選択してください');
+      peer = new Peer({
+        host: '0.peerjs.com',    // PeerJS のクラウド
+        secure: true, port: 443,
+        config: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] }
+      });
+      peer.on('open', id => myIdSpan.textContent = id);
+
+      if (role === 'user') {
+        localStream = await navigator.mediaDevices.getUserMedia({ video: true });
+        localV.srcObject = localStream;
+        // 相手からかかってきたら、自分の映像を返す
+        peer.on('call', call => {
+          call.answer(localStream);
+          call.on('stream', stream => { remoteV.srcObject = stream; });
+        });
+      } else {
+        // 計算側は初めにローカル映像無し。後で仮想カメラを取得
+        peer.on('call', async call => {
+          // 仮想カメラ (Python から流し込まれる) を取って answer
+          const cams = await navigator.mediaDevices.enumerateDevices();
+          const vc = cams.find(d => d.kind==='videoinput' && /VirtualCam|v4l2loopback/.test(d.label));
+          if (!vc) return alert('仮想カメラが見つかりません');
+          localStream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: vc.deviceId } });
+          localV.srcObject = localStream;
+          call.answer(localStream);
+          call.on('stream', stream => { remoteV.srcObject = stream; });
+        });
       }
+    };
 
-      // 動画ファイル選択時の処理
-      videoFileInput.addEventListener('change', () => {
-        const file = videoFileInput.files[0];
-        if (!file) return;
-        const url = URL.createObjectURL(file);
-        video.src = url;
-        video.style.display = 'none';
-        video.onloadedmetadata = () => {
-          // Canvas を動画サイズに合わせる
-          canvas.width = video.videoWidth;
-          canvas.height = video.videoHeight;
-          video.play();
-          startProcessing();
-        };
-      });
-
-      // 動画フレームを MediaPipe Pose に送るループ
-      function startProcessing() {
-        async function process() {
-          await pose.send({image: video});
-          if (!video.ended) {
-            requestAnimationFrame(process);
-          }
-        }
-        requestAnimationFrame(process);
+    callBtn.onclick = () => {
+      const other = peerIdIn.value.trim();
+      if (!other) return;
+      if (role === 'user') {
+        const call = peer.call(other, localStream);
+        call.on('stream', stream => { remoteV.srcObject = stream; });
+      } else {
+        // 計算側からは呼び出さず、ユーザーから来るのを待つだけ
+        alert('計算側はユーザーからの呼び出しを待ってください');
       }
-    </script>
-  </body>
+    };
+  </script>
+</body>
 </html>
