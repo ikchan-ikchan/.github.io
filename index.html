@@ -1,47 +1,46 @@
 <!DOCTYPE html>
 <html>
-  <head>
-    <meta charset="UTF-8">
-    <title>動画ファイル → MediaPipe Pose × Three.js 3D ボーン表示</title>
-    <style>
-      body { font-family: sans-serif; text-align: center; }
-      #controls { margin: 1em; }
-      #outputCanvas, #threeContainer { display: inline-block; vertical-align: top; }
-      #outputCanvas { border: 1px solid #ccc; }
-      #threeContainer { width: 640px; height: 480px; }
-    </style>
-  </head>
-  <body>
-    <h2>動画ファイルから 3D ボーンを表示</h2>
-    <div id="controls">
-      <input type="file" id="fileInput" accept="video/*">
-    </div>
-
-    <!-- 動画再生用（非表示） -->
-    <video id="video" playsinline style="display:none;"></video>
-    <!-- 2D プレビュー＆ランドマーク表示 -->
-    <canvas id="outputCanvas" width="640" height="480"></canvas>
-    <!-- Three.js での 3D 描画先 -->
-    <div id="threeContainer"></div>
-
-    <!-- MediaPipe Pose + Drawing Utils -->
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
-    <!-- Three.js -->
-    <script src="https://cdn.jsdelivr.net/npm/three@0.152.0/build/three.min.js"></script>
-
-    <script>
-    const fileInput = document.getElementById('fileInput');
-    const video     = document.getElementById('video');
-    const canvas2d  = document.getElementById('outputCanvas');
-    const ctx2d     = canvas2d.getContext('2d');
-    const threeContainer = document.getElementById('threeContainer');
-
-    // MediaPipe Pose
+<head>
+  <meta charset="UTF-8">
+  <title>動画ファイルから 2D 点描画デモ</title>
+  <style>
+    body { font-family: sans-serif; text-align: center; }
+    #controls { margin: 10px; }
+    #outputCanvas { border: 1px solid #ccc; }
+    input[type="file"] { margin: 10px; }
+  </style>
+</head>
+<body>
+  <h2>動画ファイルから 2D 点描画デモ</h2>
+  <div id="controls">
+    <input type="file" id="videoFileInput" accept="video/*">
+    <label for="fpsInput">FPS：</label>
+    <input type="number" id="fpsInput" min="1" value="15" style="width:60px;">
+    <button id="startButton">再生＆解析開始</button>
+  </div>
+  
+  <!-- 動画は非表示 -->
+  <video id="video" style="display:none;" playsinline muted></video>
+  <!-- キーポイントを描くための Canvas -->
+  <canvas id="outputCanvas" width="640" height="480"></canvas>
+  
+  <!-- MediaPipe Pose -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
+  
+  <script>
+    const fileInput = document.getElementById('videoFileInput');
+    const startButton = document.getElementById('startButton');
+    const fpsInput = document.getElementById('fpsInput');
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('outputCanvas');
+    const ctx = canvas.getContext('2d');
+    
     let pose;
-    async function initPose() {
+    
+    // MediaPipe Pose の初期化
+    function initPose() {
       pose = new Pose({
-        locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${f}`
+        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
       });
       pose.setOptions({
         modelComplexity: 1,
@@ -49,104 +48,57 @@
         minDetectionConfidence: 0.5,
         minTrackingConfidence: 0.5
       });
-      pose.onResults(onPoseResults);
+      pose.onResults(onResults);
     }
-
-    // Three.js
-    let scene, camera, renderer, skeletonLines;
-    const JOINT_PAIRS = Array.from(Pose.POSE_CONNECTIONS);  // 骨のペア
-    function initThree() {
-      scene = new THREE.Scene();
-      camera = new THREE.PerspectiveCamera(50, 640/480, 0.1, 1000);
-      camera.position.set(0, 0, 500);
-
-      renderer = new THREE.WebGLRenderer({ antialias: true });
-      renderer.setSize(640, 480);
-      threeContainer.innerHTML = '';
-      threeContainer.appendChild(renderer.domElement);
-
-      // 骨用の線ジオメトリ
-      const geometry = new THREE.BufferGeometry();
-      const material = new THREE.LineBasicMaterial({ color: 0x00ff00 });
-      // 2点 × 関節ペア数 の頂点
-      const positions = new Float32Array(JOINT_PAIRS.length * 2 * 3);
-      geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-      skeletonLines = new THREE.LineSegments(geometry, material);
-
-      scene.add(skeletonLines);
-      animateThree();
-    }
-
-    // 2D + 3D 用コールバック
-    function onPoseResults(results) {
-      // --- 2D プレビュー ---
-      ctx2d.save();
-      ctx2d.clearRect(0,0,canvas2d.width,canvas2d.height);
-      ctx2d.drawImage(results.image, 0, 0, canvas2d.width, canvas2d.height);
-      if (results.poseLandmarks) {
-        drawConnectors(ctx2d, results.poseLandmarks, Pose.POSE_CONNECTIONS,
-                       { color:'red', lineWidth:2 });
-        drawLandmarks(ctx2d, results.poseLandmarks,
-                      { color:'blue', lineWidth:1 });
-      }
-      ctx2d.restore();
-
-      // --- 3D スケルトン更新 ---
+    
+    // 解析結果を Canvas に点として描画
+    function onResults(results) {
+      // まずキャンバス全体をクリア
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      
       if (!results.poseLandmarks) return;
-      const landmarks = results.poseLandmarks;
-      const posAttr = skeletonLines.geometry.attributes.position.array;
-      const scale = 300;  // 座標スケーリング
-      JOINT_PAIRS.forEach((pair, i) => {
-        const lmA = landmarks[pair[0]];
-        const lmB = landmarks[pair[1]];
-        // x,y ∈ [0,1] → 中心を 0 に、z は相対値
-        const ax = (lmA.x - 0.5)*scale;
-        const ay = -(lmA.y - 0.5)*scale;
-        const az = -lmA.z * scale;
-        const bx = (lmB.x - 0.5)*scale;
-        const by = -(lmB.y - 0.5)*scale;
-        const bz = -lmB.z * scale;
-        // 線セグメントの頂点をセット
-        posAttr[6*i + 0] = ax;
-        posAttr[6*i + 1] = ay;
-        posAttr[6*i + 2] = az;
-        posAttr[6*i + 3] = bx;
-        posAttr[6*i + 4] = by;
-        posAttr[6*i + 5] = bz;
-      });
-      skeletonLines.geometry.attributes.position.needsUpdate = true;
+      // 各ランドマークを点で描画 (正規化座標 → Canvas 座標に変換)
+      for (const lm of results.poseLandmarks) {
+        const x = lm.x * canvas.width;
+        const y = lm.y * canvas.height;
+        ctx.beginPath();
+        ctx.arc(x, y, 5, 0, 2 * Math.PI);
+        ctx.fillStyle = 'red';
+        ctx.fill();
+      }
     }
-
-    // Three.js アニメループ
-    function animateThree() {
-      requestAnimationFrame(animateThree);
-      renderer.render(scene, camera);
-    }
-
-    // 動画フレーム処理ループ
-    function processVideo() {
-      async function sendFrame() {
+    
+    // 動画フレームを解析用に送るループ
+    function startProcessing() {
+      const fps = parseInt(fpsInput.value) || 15;
+      const interval = 1000 / fps;
+      async function tick() {
         if (!video.paused && !video.ended) {
           await pose.send({ image: video });
-          requestAnimationFrame(sendFrame);
         }
+        setTimeout(tick, interval);
       }
-      sendFrame();
+      tick();
     }
-
-    // ファイル選択ハンドラ
-    fileInput.addEventListener('change', async e => {
-      const file = e.target.files[0];
-      if (!file) return;
-      // 動画要素に読み込み & 再生
+    
+    // ファイル選択後の再生＆解析開始
+    startButton.addEventListener('click', () => {
+      const file = fileInput.files[0];
+      if (!file) {
+        alert('動画ファイルを選択してください');
+        return;
+      }
+      // 動画要素にファイルをセット
       video.src = URL.createObjectURL(file);
-      await video.play();
-
-      // 初期化
-      await initPose();
-      initThree();
-      processVideo();
+      video.onloadedmetadata = () => {
+        // Canvas を動画サイズに合わせる
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        video.play();
+        initPose();
+        startProcessing();
+      };
     });
-    </script>
-  </body>
+  </script>
+</body>
 </html>
