@@ -1,137 +1,152 @@
 <!DOCTYPE html>
-<html lang="ja">
-<head>
-  <meta charset="UTF-8">
-  <title>3D Rig Pose Editor</n  <style>
-    body { margin: 0; overflow: hidden; }
-    #ui {
-      position: absolute; top: 10px; left: 10px; z-index: 1;
-      background: rgba(255,255,255,0.8); padding: 8px; border-radius: 4px;
-      font-family: sans-serif;
+<html>
+  <head>
+    <meta charset="UTF-8">
+    <title>動画ファイル → MediaPipe Pose × Three.js 3D ボーン表示</title>
+    <style>
+      body { font-family: sans-serif; text-align: center; }
+      #controls { margin: 1em; }
+      #outputCanvas, #threeContainer { display: inline-block; vertical-align: top; }
+      #outputCanvas { border: 1px solid #ccc; }
+      #threeContainer { width: 640px; height: 480px; }
+    </style>
+  </head>
+  <body>
+    <h2>動画ファイルから 3D ボーンを表示</h2>
+    <div id="controls">
+      <input type="file" id="fileInput" accept="video/*">
+    </div>
+
+    <!-- 動画再生用（非表示） -->
+    <video id="video" playsinline style="display:none;"></video>
+    <!-- 2D プレビュー＆ランドマーク表示 -->
+    <canvas id="outputCanvas" width="640" height="480"></canvas>
+    <!-- Three.js での 3D 描画先 -->
+    <div id="threeContainer"></div>
+
+    <!-- MediaPipe Pose + Drawing Utils -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+    <!-- Three.js -->
+    <script src="https://cdn.jsdelivr.net/npm/three@0.152.0/build/three.min.js"></script>
+
+    <script>
+    const fileInput = document.getElementById('fileInput');
+    const video     = document.getElementById('video');
+    const canvas2d  = document.getElementById('outputCanvas');
+    const ctx2d     = canvas2d.getContext('2d');
+    const threeContainer = document.getElementById('threeContainer');
+
+    // MediaPipe Pose
+    let pose;
+    async function initPose() {
+      pose = new Pose({
+        locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${f}`
+      });
+      pose.setOptions({
+        modelComplexity: 1,
+        smoothLandmarks: true,
+        minDetectionConfidence: 0.5,
+        minTrackingConfidence: 0.5
+      });
+      pose.onResults(onPoseResults);
     }
-    button { display: block; margin-bottom: 6px; padding: 4px 8px; }
-  </style>
-</head>
-<body>
-  <div id="ui">
-    <button id="resetBtn">リセット ポーズ</button>
-  </div>
 
-  <!-- Three.js core -->
-  <script src="https://unpkg.com/three@0.159.0/build/three.min.js"></script>
-  <!-- Load controls and loader -->
-  <script src="https://unpkg.com/three@0.159.0/examples/js/controls/OrbitControls.js"></script>
-  <script src="https://unpkg.com/three@0.159.0/examples/js/controls/TransformControls.js"></script>
-  <script src="https://unpkg.com/three@0.159.0/examples/js/loaders/GLTFLoader.js"></script>
-
-  <script>
-    let scene, camera, renderer;
-    let orbitCtrl, transformCtrl;
-    let skeleton, skeletonHelper, model;
-
-    init();
-    animate();
-
-    function init() {
-      // シーンとカメラ
+    // Three.js
+    let scene, camera, renderer, skeletonLines;
+    const JOINT_PAIRS = Array.from(Pose.POSE_CONNECTIONS);  // 骨のペア
+    function initThree() {
       scene = new THREE.Scene();
-      scene.background = new THREE.Color(0xeeeeee);
-      camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
-      camera.position.set(1.5, 1.5, 3);
+      camera = new THREE.PerspectiveCamera(50, 640/480, 0.1, 1000);
+      camera.position.set(0, 0, 500);
 
-      // レンダラー
       renderer = new THREE.WebGLRenderer({ antialias: true });
-      renderer.setSize(window.innerWidth, window.innerHeight);
-      document.body.appendChild(renderer.domElement);
+      renderer.setSize(640, 480);
+      threeContainer.innerHTML = '';
+      threeContainer.appendChild(renderer.domElement);
 
-      // オービットコントロール
-      orbitCtrl = new THREE.OrbitControls(camera, renderer.domElement);
-      orbitCtrl.target.set(0, 1, 0);
-      orbitCtrl.update();
+      // 骨用の線ジオメトリ
+      const geometry = new THREE.BufferGeometry();
+      const material = new THREE.LineBasicMaterial({ color: 0x00ff00 });
+      // 2点 × 関節ペア数 の頂点
+      const positions = new Float32Array(JOINT_PAIRS.length * 2 * 3);
+      geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      skeletonLines = new THREE.LineSegments(geometry, material);
 
-      // ライティング
-      scene.add(new THREE.AmbientLight(0xffffff, 0.6));
-      const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
-      dirLight.position.set(5, 10, 7.5);
-      scene.add(dirLight);
-
-      // グリッド
-      scene.add(new THREE.GridHelper(10, 10));
-
-      // モデル読み込み
-      const loader = new THREE.GLTFLoader();
-      loader.load(
-        'https://rawcdn.githack.com/KhronosGroup/glTF-Sample-Models/master/2.0/RiggedSimple/glTF-Binary/RiggedSimple.glb',
-        gltf => {
-          model = gltf.scene;
-          scene.add(model);
-          model.traverse(obj => {
-            if (obj.isSkinnedMesh) {
-              skeleton = obj.skeleton;
-            }
-          });
-          // 骨格ヘルパー
-          skeletonHelper = new THREE.SkeletonHelper(model);
-          scene.add(skeletonHelper);
-          setupBoneHandles();
-        }
-      );
-
-      // トランスフォームコントロール
-      transformCtrl = new THREE.TransformControls(camera, renderer.domElement);
-      transformCtrl.setMode('rotate');
-      transformCtrl.addEventListener('dragging-changed', e => {
-        orbitCtrl.enabled = !e.value;
-      });
-      scene.add(transformCtrl);
-
-      // リセットボタン
-      document.getElementById('resetBtn').addEventListener('click', () => {
-        if (skeleton) skeleton.pose();
-      });
-
-      window.addEventListener('resize', onWindowResize);
+      scene.add(skeletonLines);
+      animateThree();
     }
 
-    function setupBoneHandles() {
-      // 各ボーンにハンドル用スフィアを付与
-      skeleton.bones.forEach(bone => {
-        const handle = new THREE.Mesh(
-          new THREE.SphereGeometry(0.02),
-          new THREE.MeshBasicMaterial({ color: 0xff0000 })
-        );
-        bone.add(handle);
-        handle.userData.bone = bone;
-      });
+    // 2D + 3D 用コールバック
+    function onPoseResults(results) {
+      // --- 2D プレビュー ---
+      ctx2d.save();
+      ctx2d.clearRect(0,0,canvas2d.width,canvas2d.height);
+      ctx2d.drawImage(results.image, 0, 0, canvas2d.width, canvas2d.height);
+      if (results.poseLandmarks) {
+        drawConnectors(ctx2d, results.poseLandmarks, Pose.POSE_CONNECTIONS,
+                       { color:'red', lineWidth:2 });
+        drawLandmarks(ctx2d, results.poseLandmarks,
+                      { color:'blue', lineWidth:1 });
+      }
+      ctx2d.restore();
 
-      // ピッキング用レイキャスター
-      const raycaster = new THREE.Raycaster();
-      const pointer = new THREE.Vector2();
-      renderer.domElement.addEventListener('pointerdown', event => {
-        pointer.x = (event.clientX / window.innerWidth) * 2 - 1;
-        pointer.y = -(event.clientY / window.innerHeight) * 2 + 1;
-        raycaster.setFromCamera(pointer, camera);
-        const intersects = raycaster.intersectObjects(scene.children, true);
-        for (let i = 0; i < intersects.length; i++) {
-          const obj = intersects[i].object;
-          if (obj.userData.bone) {
-            transformCtrl.attach(obj);
-            break;
-          }
-        }
+      // --- 3D スケルトン更新 ---
+      if (!results.poseLandmarks) return;
+      const landmarks = results.poseLandmarks;
+      const posAttr = skeletonLines.geometry.attributes.position.array;
+      const scale = 300;  // 座標スケーリング
+      JOINT_PAIRS.forEach((pair, i) => {
+        const lmA = landmarks[pair[0]];
+        const lmB = landmarks[pair[1]];
+        // x,y ∈ [0,1] → 中心を 0 に、z は相対値
+        const ax = (lmA.x - 0.5)*scale;
+        const ay = -(lmA.y - 0.5)*scale;
+        const az = -lmA.z * scale;
+        const bx = (lmB.x - 0.5)*scale;
+        const by = -(lmB.y - 0.5)*scale;
+        const bz = -lmB.z * scale;
+        // 線セグメントの頂点をセット
+        posAttr[6*i + 0] = ax;
+        posAttr[6*i + 1] = ay;
+        posAttr[6*i + 2] = az;
+        posAttr[6*i + 3] = bx;
+        posAttr[6*i + 4] = by;
+        posAttr[6*i + 5] = bz;
       });
+      skeletonLines.geometry.attributes.position.needsUpdate = true;
     }
 
-    function onWindowResize() {
-      camera.aspect = window.innerWidth / window.innerHeight;
-      camera.updateProjectionMatrix();
-      renderer.setSize(window.innerWidth, window.innerHeight);
-    }
-
-    function animate() {
-      requestAnimationFrame(animate);
+    // Three.js アニメループ
+    function animateThree() {
+      requestAnimationFrame(animateThree);
       renderer.render(scene, camera);
     }
-  </script>
-</body>
+
+    // 動画フレーム処理ループ
+    function processVideo() {
+      async function sendFrame() {
+        if (!video.paused && !video.ended) {
+          await pose.send({ image: video });
+          requestAnimationFrame(sendFrame);
+        }
+      }
+      sendFrame();
+    }
+
+    // ファイル選択ハンドラ
+    fileInput.addEventListener('change', async e => {
+      const file = e.target.files[0];
+      if (!file) return;
+      // 動画要素に読み込み & 再生
+      video.src = URL.createObjectURL(file);
+      await video.play();
+
+      // 初期化
+      await initPose();
+      initThree();
+      processVideo();
+    });
+    </script>
+  </body>
 </html>
