@@ -1,65 +1,73 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-  <meta charset="UTF-8">
-  <title>IK Rig Demo</title>
+  <meta charset="UTF-8" />
+  <title>IK Rig Demo (ES Modules)</title>
   <style>
     body { margin: 0; overflow: hidden; }
     #info { position: absolute; top: 10px; left: 10px; color: #fff; }
   </style>
 </head>
 <body>
-  <div id="info">ドラッグで赤いターゲットを動かし、Arm の IK を操作できます。</div>
-  <script src="https://unpkg.com/three@0.152.0/build/three.min.js"></script>
-  <script src="https://unpkg.com/three@0.152.0/examples/js/controls/OrbitControls.js"></script>
-  <script src="https://unpkg.com/three@0.152.0/examples/js/controls/TransformControls.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/three-ik@0.2.2/dist/three-ik.min.js"></script>
-  <script>
-    // シーン、カメラ、ライト
+  <div id="info">
+    ドラッグで赤いターゲットを動かし、Arm の IK を操作できます。
+  </div>
+
+  <script type="module">
+    // ES モジュール版の Three.js
+    import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.module.js';
+    // ES モジュール版コントロール
+    import { OrbitControls }     from 'https://cdn.jsdelivr.net/npm/three@0.152.2/examples/jsm/controls/OrbitControls.js';
+    import { TransformControls } from 'https://cdn.jsdelivr.net/npm/three@0.152.2/examples/jsm/controls/TransformControls.js';
+    // IK ソルバーをモジュールとして
+    import { IK, IKChain, IKJoint, IKBallConstraint } from 'https://cdn.skypack.dev/three-ik';
+
+    // --- シーン／カメラ／レンダラ ---
     const scene    = new THREE.Scene();
     const camera   = new THREE.PerspectiveCamera(50, innerWidth/innerHeight, 0.1, 100);
     camera.position.set(2, 2, 5);
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(innerWidth, innerHeight);
     document.body.appendChild(renderer.domElement);
+
+    // ライティング
     scene.add(new THREE.AmbientLight(0x888888));
     const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
-    dirLight.position.set(5,10,7);
+    dirLight.position.set(5, 10, 7);
     scene.add(dirLight);
 
-    // コントロール
-    const orbit = new THREE.OrbitControls(camera, renderer.domElement);
+    // カメラ操作
+    const orbit = new OrbitControls(camera, renderer.domElement);
 
-    // IK セットアップ
-    const ik = new THREE.IK();
+    // --- IK リグ設定 ---
+    const ik = new IK();
 
-    // Arm を構成するボーンを３つ作成
+    // 3ボーンのアームを作成
     const bones = [];
-    let prevBone = new THREE.Bone();
-    prevBone.position.set(0, 0, 0);
-    bones.push(prevBone);
-    for (let i = 1; i <= 2; i++) {
+    let parent = new THREE.Bone();
+    parent.position.set(0, 0, 0);
+    bones.push(parent);
+    for (let i = 1; i < 3; i++) {
       const bone = new THREE.Bone();
-      bone.position.y = 0.8;  // 各ボーンの長さ
-      prevBone.add(bone);
+      bone.position.y = 0.8;
+      parent.add(bone);
       bones.push(bone);
-      prevBone = bone;
+      parent = bone;
     }
     scene.add(bones[0]);
 
-    // Bone の可視化（デバッグ用）
-    const skeletonHelper = new THREE.SkeletonHelper(bones[0]);
-    skeletonHelper.material.linewidth = 2;
-    scene.add(skeletonHelper);
+    // ボーン可視化
+    const helper = new THREE.SkeletonHelper(bones[0]);
+    helper.material.linewidth = 2;
+    scene.add(helper);
 
-    // IKChain にボーンを追加
-    const chain = new THREE.IKChain();
+    // IK チェーンにジャイント追加
+    const chain = new IKChain();
     bones.forEach((bone, idx) => {
-      // 最終ボーン（手首）は Free、他は回転制限をつけても OK
-      chain.add(new THREE.IKJoint(bone, {
+      chain.add(new IKJoint(bone, {
         constraints: idx < bones.length - 1
-          ? [ new THREE.IKBallConstraint(180) ]
-          : []
+          ? [ new IKBallConstraint(180) ]  // 中間ボーンには回転制限
+          : []  // 末端はフリー
       }));
     });
     ik.addChain(chain);
@@ -67,22 +75,21 @@
     // IK ターゲット（赤い球）
     const targetGeo = new THREE.SphereGeometry(0.1, 16, 16);
     const targetMat = new THREE.MeshStandardMaterial({ color: 0xff0000 });
-    const target = new THREE.Mesh(targetGeo, targetMat);
-    target.position.copy(bones[bones.length-1].getWorldPosition(new THREE.Vector3()));
+    const target    = new THREE.Mesh(targetGeo, targetMat);
+    target.position.copy(bones[2].getWorldPosition(new THREE.Vector3()));
     scene.add(target);
 
-    // IK にターゲットを設定
     chain.setTarget(target);
 
-    // TransformControls でドラッグ可能に
-    const transform = new THREE.TransformControls(camera, renderer.domElement);
+    // ターゲットをドラッグ可能に
+    const transform = new TransformControls(camera, renderer.domElement);
     transform.attach(target);
     transform.setMode('translate');
     transform.addEventListener('dragging-changed', e => {
       orbit.enabled = !e.value;
     });
     transform.addEventListener('change', () => {
-      ik.solve();  // ターゲット動かしたら IK 解く
+      ik.solve();
     });
     scene.add(transform);
 
@@ -93,7 +100,7 @@
     }
     animate();
 
-    // ウィンドウリサイズ対応
+    // リサイズ対応
     window.addEventListener('resize', () => {
       camera.aspect = innerWidth/innerHeight;
       camera.updateProjectionMatrix();
