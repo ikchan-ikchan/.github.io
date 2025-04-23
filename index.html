@@ -1,235 +1,207 @@
 <!DOCTYPE html>
 <html>
   <head>
-    <meta charset="UTF-8" />
-    <title>MediaPipe 3D Skeleton + IK Demo</title>
+    <meta charset="UTF-8">
+    <title>MediaPipe Pose + 3D Skeleton</title>
     <style>
-      body {
-        font-family: sans-serif;
-        text-align: center;
-      }
-      video,
-      canvas {
-        display: block;
-        margin: 10px auto;
-      }
-      #threeCanvas {
-        width: 640px;
-        height: 480px;
-      }
+      body { font-family: sans-serif; text-align: center; margin: 0; }
+      #controls { margin: 10px; }
+      video, canvas { display: block; margin: 0 auto; }
+      #outputContainer { display: flex; flex-direction: column; align-items: center; }
+      #videoCanvas { border: 1px solid #ccc; }
+      #threejsCanvas { width: 640px; height: 480px; }
     </style>
   </head>
   <body>
-    <h2>MediaPipe Pose + 3D 骨長フィッティング ＋ 平滑化デモ</h2>
-    <video
-      id="video"
-      autoplay
-      muted
-      playsinline
-      style="display:none"
-    ></video>
-    <canvas id="outputCanvas"></canvas>
-    <canvas id="threeCanvas"></canvas>
+    <h2>MediaPipe Pose + 3D Skeleton Rendering</h2>
+    <div id="controls">
+      <label for="cameraSelect">カメラ選択:</label>
+      <select id="cameraSelect"></select>
+      &nbsp;&nbsp;
+      <label for="frameRateInput">フレームレート (fps):</label>
+      <input type="number" id="frameRateInput" min="1" value="15" style="width:60px;">
+      &nbsp;&nbsp;
+      <label for="resPercentInput">解像度 (%):</label>
+      <input type="number" id="resPercentInput" min="1" max="100" value="100" style="width:60px;">
+      &nbsp;&nbsp;
+      <button id="startButton">開始</button>
+      <div id="maxResolutionInfo"></div>
+    </div>
+
+    <div id="outputContainer">
+      <video id="video" autoplay muted playsinline style="display:none;"></video>
+      <canvas id="videoCanvas"></canvas>
+      <div id="threejsCanvas"></div>
+    </div>
 
     <!-- MediaPipe Pose -->
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
     <!-- Three.js -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.min.js"></script>
 
     <script>
-      // ---- HTML エレメント ----
-      const video = document.getElementById("video");
-      const outputCanvas = document.getElementById("outputCanvas");
-      const ctx2d = outputCanvas.getContext("2d");
-      const threeCanvas = document.getElementById("threeCanvas");
+      // DOM Elements
+      const video = document.getElementById('video');
+      const videoCanvas = document.getElementById('videoCanvas');
+      const vctx = videoCanvas.getContext('2d');
+      const threeContainer = document.getElementById('threejsCanvas');
+      const cameraSelect = document.getElementById('cameraSelect');
+      const frameRateInput = document.getElementById('frameRateInput');
+      const resPercentInput = document.getElementById('resPercentInput');
+      const startButton = document.getElementById('startButton');
+      const maxResolutionInfo = document.getElementById('maxResolutionInfo');
 
-      // ---- Three.js シーンセットアップ ----
-      const scene = new THREE.Scene();
-      const camera = new THREE.PerspectiveCamera(
-        45,
-        threeCanvas.clientWidth / threeCanvas.clientHeight,
-        0.1,
-        1000
-      );
-      camera.position.set(0, 200, 400);
-      const renderer = new THREE.WebGLRenderer({ canvas: threeCanvas });
-      renderer.setSize(
-        threeCanvas.clientWidth,
-        threeCanvas.clientHeight
-      );
-      // ライト
-      const light = new THREE.DirectionalLight(0xffffff, 1);
-      light.position.set(0, 200, 100).normalize();
-      scene.add(light);
+      // MediaPipe Pose
+      let pose;
 
-      // ボーン接続リスト (Mediapipe の 33 点から代表 24 本)
-      const POSE_CONNECTIONS = [
-        [0, 1], [1, 2], [2, 3], [3, 7],
-        [0, 4], [4, 5], [5, 6], [6, 8],
-        [9,10],[11,12],[11,13],[13,15],
-        [12,14],[14,16],[15,17],[16,18],
-        [11,23],[12,24],[23,24],[23,25],
-        [24,26],[25,27],[26,28]
-      ];
+      // Three.js scene
+      let scene, camera, renderer, skeletonLines;
+      let initialBoneLengths = {};
+      const connections = Pose.POSE_CONNECTIONS;
 
-      // Three.js で線オブジェクトを用意
-      const boneLines = [];
-      POSE_CONNECTIONS.forEach(() => {
-        const mat = new THREE.LineBasicMaterial({ color: 0x00ff00 });
-        const geom = new THREE.BufferGeometry().setFromPoints([
-          new THREE.Vector3(),
-          new THREE.Vector3()
-        ]);
-        const line = new THREE.Line(geom, mat);
-        scene.add(line);
-        boneLines.push(line);
-      });
-
-      // ---- 状態変数 ----
-      let initialBoneLengths = null; // [[parentIdx, childIdx, length],...]
-      let prevSmoothed = []; // jointごとの smoothed ポジション
-      const smoothAlpha = 0.7; // 平滑化係数（小さくするほど滑らか）
-
-      // ---- MediaPipe Pose の初期化 ----
-      const pose = new Pose({
-        locateFile: (file) =>
-          `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`,
-      });
-      pose.setOptions({
-        modelComplexity: 1,
-        smoothLandmarks: true,
-        minDetectionConfidence: 0.5,
-        minTrackingConfidence: 0.5,
-      });
-      pose.onResults(onResults);
-
-      // カメラ開始
-      async function startCamera() {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { width: 640, height: 480 },
+      async function enumerateCameras() {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const videoDevices = devices.filter(d => d.kind === 'videoinput');
+        videoDevices.forEach((device, i) => {
+          const opt = document.createElement('option');
+          opt.value = device.deviceId;
+          opt.text = device.label || `Camera ${i+1}`;
+          cameraSelect.append(opt);
         });
-        video.srcObject = stream;
-        await new Promise((r) => (video.onloadedmetadata = r));
-        outputCanvas.width = video.videoWidth;
-        outputCanvas.height = video.videoHeight;
       }
 
-      // 1フレーム処理
-      async function onResults(results) {
-        // 2D 描画
-        ctx2d.save();
-        ctx2d.clearRect(0, 0, outputCanvas.width, outputCanvas.height);
-        ctx2d.drawImage(
-          results.image,
-          0,
-          0,
-          outputCanvas.width,
-          outputCanvas.height
-        );
-        if (results.poseLandmarks) {
-          drawConnectors(
-            ctx2d,
-            results.poseLandmarks,
-            POSE_CONNECTIONS,
-            { color: "lime", lineWidth: 2 }
-          );
-          drawLandmarks(ctx2d, results.poseLandmarks, {
-            color: "red",
-            lineWidth: 1,
-          });
-        }
-        ctx2d.restore();
+      function initThree() {
+        scene = new THREE.Scene();
+        camera = new THREE.PerspectiveCamera(60, 640/480, 0.1, 10);
+        camera.position.set(0, 1.5, 3);
+        renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(640, 480);
+        threeContainer.appendChild(renderer.domElement);
 
-        // worldLandmarks (meters 単位)
-        const w = results.worldLandmarks;
-        if (!w) return;
-
-        // 初期フレームで骨長を計算
-        if (!initialBoneLengths) {
-          initialBoneLengths = POSE_CONNECTIONS.map(([p, c]) => {
-            const a = new THREE.Vector3(
-              w[p].x,
-              w[p].y * -1,
-              w[p].z * -1
-            );
-            const b = new THREE.Vector3(
-              w[c].x,
-              w[c].y * -1,
-              w[c].z * -1
-            );
-            return [p, c, a.distanceTo(b)];
-          });
-          // 初期 prevSmoothed を設定
-          prevSmoothed = w.map((lm) =>
-            new THREE.Vector3(
-              lm.x,
-              lm.y * -1,
-              lm.z * -1
-            )
-          );
-        }
-
-        // ボーン長フィッティング＋平滑化
-        const smoothed = prevSmoothed.map((v) => v.clone());
-        // まず rawPositions を取り込む
-        const raw = w.map((lm) =>
-          new THREE.Vector3(
-            lm.x,
-            lm.y * -1,
-            lm.z * -1
-          )
-        );
-        // ボーンごとに長さを固定
-        initialBoneLengths.forEach(([p, c, L]) => {
-          const parent = smoothed[p];
-          const dir = raw[c].clone().sub(raw[p]).normalize();
-          const fitted = parent.clone().add(dir.multiplyScalar(L));
-          smoothed[c].copy(
-            fitted.lerp(prevSmoothed[c], 1 - smoothAlpha)
-          );
-        });
-        // 根元（0）だけ平滑化
-        smoothed[0].copy(
-          raw[0].clone().lerp(prevSmoothed[0], 1 - smoothAlpha)
-        );
-
-        // Three.js のライン更新
-        boneLines.forEach((line, idx) => {
-          const [p, c] = POSE_CONNECTIONS[idx];
-          const pa = smoothed[p]
-            .clone()
-            .multiplyScalar(100); // m→cm スケーリング
-          const cb = smoothed[c].clone().multiplyScalar(100);
-          const posArr = new Float32Array([
-            pa.x, pa.y, pa.z,
-            cb.x, cb.y, cb.z,
+        // Skeleton lines
+        skeletonLines = new THREE.Group();
+        connections.forEach(([i, j]) => {
+          const geom = new THREE.BufferGeometry().setFromPoints([
+            new THREE.Vector3(), new THREE.Vector3()
           ]);
-          line.geometry.setAttribute(
-            "position",
-            new THREE.BufferAttribute(posArr, 3)
-          );
-          line.geometry.attributes.position.needsUpdate = true;
+          const mat = new THREE.LineBasicMaterial({ color: 0x00ff00 });
+          const line = new THREE.Line(geom, mat);
+          skeletonLines.add(line);
         });
+        scene.add(skeletonLines);
 
-        // 次フレーム用に保存
-        prevSmoothed = smoothed;
+        // Light
+        const light = new THREE.DirectionalLight(0xffffff, 1);
+        light.position.set(0, 5, 5);
+        scene.add(light);
 
-        // レンダリング
+        animateThree();
+      }
+
+      function animateThree() {
+        requestAnimationFrame(animateThree);
         renderer.render(scene, camera);
       }
 
-      // メインループ
-      async function run() {
-        await startCamera();
+      function initializePose() {
+        pose = new Pose({ locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${f}` });
+        pose.setOptions({
+          modelComplexity: 1,
+          smoothLandmarks: true,
+          minDetectionConfidence: 0.5,
+          minTrackingConfidence: 0.5
+        });
+        pose.onResults(onResults);
+      }
+
+      function onResults(results) {
+        // Draw video + 2D overlay
+        videoCanvas.width = results.image.width;
+        videoCanvas.height = results.image.height;
+        vctx.drawImage(results.image, 0, 0);
+        if (results.poseLandmarks) {
+          drawConnectors(vctx, results.poseLandmarks, Pose.POSE_CONNECTIONS, { color: 'lime', lineWidth: 2 });
+          drawLandmarks(vctx, results.poseLandmarks, { color: 'red', lineWidth: 1 });
+        }
+
+        // Update 3D skeleton from world landmarks
+        if (results.poseWorldLandmarks) {
+          updateSkeleton3D(results.poseWorldLandmarks);
+        }
+      }
+
+      function updateSkeleton3D(worldLandmarks) {
+        // On first frame, record bone lengths
+        if (Object.keys(initialBoneLengths).length === 0) {
+          connections.forEach(([i, j], idx) => {
+            const p = worldLandmarks[i];
+            const c = worldLandmarks[j];
+            const len = Math.hypot(c.x-p.x, c.y-p.y, c.z-p.z);
+            initialBoneLengths[`${i}_${j}`] = len;
+          });
+        }
+        // Update each line
+        let idx = 0;
+        skeletonLines.children.forEach(line => {
+          const [i, j] = connections[idx];
+          const p = worldLandmarks[i];
+          const c = worldLandmarks[j];
+          // Direction
+          const dir = new THREE.Vector3(c.x-p.x, c.y-p.y, c.z-p.z).normalize();
+          const targetLen = initialBoneLengths[`${i}_${j}`];
+          const end = new THREE.Vector3(p.x, p.y, -p.z).clone().add(dir.multiplyScalar(targetLen));
+          const start = new THREE.Vector3(p.x, p.y, -p.z);
+
+          const positions = line.geometry.attributes.position.array;
+          positions[0] = start.x; positions[1] = start.y; positions[2] = start.z;
+          positions[3] = end.x;   positions[4] = end.y;   positions[5] = end.z;
+          line.geometry.attributes.position.needsUpdate = true;
+          idx++;
+        });
+      }
+
+      async function startCamera() {
+        const deviceId = cameraSelect.value;
+        // Probe capabilities
+        const probeStream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: deviceId } } });
+        const track = probeStream.getVideoTracks()[0];
+        const caps = track.getCapabilities();
+        track.stop();
+        const maxW = caps.width.max || 640;
+        const maxH = caps.height.max || 480;
+        maxResolutionInfo.innerText = `最大解像度: ${maxW}×${maxH}`;
+
+        const pct = parseInt(resPercentInput.value);
+        const w = Math.floor(maxW * pct/100);
+        const h = Math.floor(maxH * pct/100);
+        const fps = parseInt(frameRateInput.value);
+
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { deviceId: { exact: deviceId }, width: w, height: h, frameRate: { ideal: fps } }
+        });
+        video.srcObject = stream;
+        await new Promise(r => video.onloadedmetadata = r);
+      }
+
+      function processVideo() {
+        const fps = parseInt(frameRateInput.value);
+        const interval = 1000 / fps;
         async function frameLoop() {
           await pose.send({ image: video });
-          requestAnimationFrame(frameLoop);
+          setTimeout(frameLoop, interval);
         }
         frameLoop();
       }
 
-      run();
+      startButton.onclick = async () => {
+        await startCamera();
+        initializePose();
+        processVideo();
+      };
+
+      enumerateCameras();
+      initThree();
     </script>
   </body>
 </html>
