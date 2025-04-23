@@ -2,16 +2,27 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <title>MediaPipe Pose × Three.js IK Rig (VNect風)</title>
+  <title>MediaPipe Pose × Three.js IK Rig (VNect風) with File Input</title>
   <style>
     body { margin: 0; overflow: hidden; }
     #controls { position: absolute; top: 10px; left: 10px; z-index: 1; background: rgba(255,255,255,0.8); padding: 8px; border-radius: 4px; }
-    #controls label, #controls select, #controls input { font-size: 14px; }
+    #controls label, #controls select, #controls input, #controls button { font-size: 14px; margin-right: 8px; }
   </style>
 </head>
 <body>
 <div id="controls">
-  <label>カメラ: <select id="cameraSelect"></select></label>
+  <label>動画ソース:
+    <select id="sourceSelect">
+      <option value="camera">カメラ</option>
+      <option value="file">ファイル</option>
+    </select>
+  </label>
+  <label id="cameraLabel">カメラ:
+    <select id="cameraSelect"></select>
+  </label>
+  <label id="fileLabel" style="display:none;">ファイル:
+    <input type="file" id="fileInput" accept="video/*">
+  </label>
   <button id="startButton">開始</button>
 </div>
 <video id="video" style="display:none;" autoplay muted playsinline></video>
@@ -26,9 +37,12 @@
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
 <script>
 (async function(){
-  // DOM
   const video = document.getElementById('video');
+  const sourceSelect = document.getElementById('sourceSelect');
   const cameraSelect = document.getElementById('cameraSelect');
+  const fileInput = document.getElementById('fileInput');
+  const cameraLabel = document.getElementById('cameraLabel');
+  const fileLabel = document.getElementById('fileLabel');
   const startBtn = document.getElementById('startButton');
   const canvas = document.getElementById('threeCanvas');
 
@@ -42,106 +56,83 @@
   controls.target.set(0,1,0);
   controls.update();
   scene.add(new THREE.GridHelper(10,10));
-
-  // Light
   scene.add(new THREE.HemisphereLight(0xffffff,0x444444));
   const dir = new THREE.DirectionalLight(0xffffff,0.8);
   dir.position.set(3,10,10);
   scene.add(dir);
-
-  // IK setup
   const ik = new IK();
   scene.add(ik.getRootBone());
 
-  // Helper to create chain from joints
-  function buildChain(jointNames, color) {
+  function buildChain(jointNames){
     const chain = new IKChain();
-    let prevBone = chain.add(new IKJoint(new THREE.Bone(), { constraints: [] }));
-    for(let i=1;i<jointNames.length;i++) {
-      const bone = new THREE.Bone();
-      prevBone.bone.add(bone);
-      prevBone = chain.add(new IKJoint(bone, { constraints: [] }));
-    }
+    let prev = chain.add(new IKJoint(new THREE.Bone(), { constraints: [] }));
+    jointNames.slice(1).forEach(name=>{
+      const b = new THREE.Bone(); prev.bone.add(b);
+      prev = chain.add(new IKJoint(b, { constraints: [] }));
+    });
     ik.addChain(chain);
     return { chain, jointNames };
   }
+  const chains = [
+    buildChain(['left_shoulder','left_elbow','left_wrist']),
+    buildChain(['right_shoulder','right_elbow','right_wrist']),
+    buildChain(['left_hip','left_knee','left_ankle']),
+    buildChain(['right_hip','right_knee','right_ankle']),
+    buildChain(['nose','left_shoulder','right_shoulder'])
+  ];
 
-  // Define human skeleton chains
-  const chains = [];
-  // Example: left arm
-  chains.push(buildChain(
-    ['left_shoulder','left_elbow','left_wrist'],0xff0000));
-  // right arm
-  chains.push(buildChain(
-    ['right_shoulder','right_elbow','right_wrist'],0x0000ff));
-  // left leg
-  chains.push(buildChain(
-    ['left_hip','left_knee','left_ankle'],0x00ff00));
-  // right leg
-  chains.push(buildChain(
-    ['right_hip','right_knee','right_ankle'],0xffff00));
-
-  // Root: spine and head (simple two-bone)
-  chains.push(buildChain([
-    'nose','left_shoulder','right_shoulder'
-  ],0xffffff));
-
-  // MediaPipe Pose init
-  const pose = new Pose({locateFile:(f)=>`https://cdn.jsdelivr.net/npm/@mediapipe/pose/${f}`});
-  pose.setOptions({modelComplexity:1,smoothLandmarks:true,minDetectionConfidence:0.5,minTrackingConfidence:0.5});
+  const pose = new Pose({ locateFile: f=>`https://cdn.jsdelivr.net/npm/@mediapipe/pose/${f}` });
+  pose.setOptions({ modelComplexity:1, smoothLandmarks:true, minDetectionConfidence:0.5, minTrackingConfidence:0.5 });
   pose.onResults(onPoseResults);
 
-  // Camera selection
   async function enumerateCameras(){
     const devices = await navigator.mediaDevices.enumerateDevices();
     devices.filter(d=>d.kind==='videoinput').forEach((d,i)=>{
-      const o=new Option(d.label||`camera ${i+1}`, d.deviceId);
-      cameraSelect.add(o);
+      cameraSelect.add(new Option(d.label||`カメラ${i+1}`, d.deviceId));
     });
   }
 
-  // Start video
+  sourceSelect.addEventListener('change',()=>{
+    if(sourceSelect.value==='camera'){
+      cameraLabel.style.display='inline'; fileLabel.style.display='none';
+    } else {
+      cameraLabel.style.display='none'; fileLabel.style.display='inline';
+    }
+  });
+
   async function startVideo(){
-    if(window.stream) window.stream.getTracks().forEach(t=>t.stop());
-    const constraints={video:{deviceId:{exact:cameraSelect.value}}};
-    window.stream = await navigator.mediaDevices.getUserMedia(constraints);
-    video.srcObject = window.stream;
+    if(sourceSelect.value==='camera'){
+      if(window.stream) window.stream.getTracks().forEach(t=>t.stop());
+      const constraints={video:{deviceId:{exact:cameraSelect.value}}};
+      window.stream = await navigator.mediaDevices.getUserMedia(constraints);
+      video.srcObject = window.stream;
+    } else {
+      const file = fileInput.files[0];
+      if(!file) return alert('動画ファイルを選択してください');
+      video.srcObject = null;
+      video.src = URL.createObjectURL(file);
+    }
     await new Promise(r=>video.onloadedmetadata=r);
+    video.play();
   }
 
-  // Pose results
   function onPoseResults(results){
-    // landmarks normalized [x,y,z]
     const lm = results.poseLandmarks;
     if(!lm) return;
-    // Map each chain target to landmark
     chains.forEach(({chain,jointNames})=>{
-      const targetName = jointNames[jointNames.length-1];
-      const pt = lm[Pose.POSE_LANDMARKS[targetName.toUpperCase()]];
-      if(pt){
-        const x = (pt.x-0.5)*2; // map [0,1]->[-1,1]
-        const y = (0.5-pt.y)*2; // invert y
-        const z = -pt.z;       // depth
-        chain.getIKHelper().getTargets()[0].position.set(x,y,z);
-      }
+      const target = jointNames[jointNames.length-1];
+      const idx = Pose.POSE_LANDMARKS[target.toUpperCase()];
+      const p = lm[idx]; if(!p) return;
+      const x=(p.x-0.5)*2, y=(0.5-p.y)*2, z=-p.z;
+      chain.getIKHelper().getTargets()[0].position.set(x,y,z);
     });
     ik.solve();
   }
 
-  // Animation loop
-  function animate(){
-    renderer.render(scene, cam);
-    requestAnimationFrame(animate);
-  }
+  function animate(){ renderer.render(scene,cam); requestAnimationFrame(animate); }
 
-  // Initialization
   await enumerateCameras();
-  startBtn.onclick=async()=>{
-    await startVideo();
-    initializePose();
-    animate();
-    async function loop(){ await pose.send({image:video}); requestAnimationFrame(loop);} loop();
-  };
+  startBtn.onclick = async()=>{ await startVideo(); animate(); (async function loop(){ await pose.send({image:video}); requestAnimationFrame(loop); })(); };
 })();
 </script>
 </body>
