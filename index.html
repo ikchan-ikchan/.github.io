@@ -1,104 +1,91 @@
 <!DOCTYPE html>
-<html>
+<html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <title>動画ファイルから 2D 点描画デモ</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MediaPipe Pose Demo</title>
   <style>
     body { font-family: sans-serif; text-align: center; }
-    #controls { margin: 10px; }
     #outputCanvas { border: 1px solid #ccc; }
-    input[type="file"] { margin: 10px; }
   </style>
 </head>
 <body>
-  <h2>動画ファイルから 2D 点描画デモ</h2>
-  <div id="controls">
-    <input type="file" id="videoFileInput" accept="video/*">
-    <label for="fpsInput">FPS：</label>
-    <input type="number" id="fpsInput" min="1" value="15" style="width:60px;">
-    <button id="startButton">再生＆解析開始</button>
-  </div>
-  
-  <!-- 動画は非表示 -->
-  <video id="video" style="display:none;" playsinline muted></video>
-  <!-- キーポイントを描くための Canvas -->
-  <canvas id="outputCanvas" width="640" height="480"></canvas>
-  
-  <!-- MediaPipe Pose -->
+  <h1>MediaPipe Pose を使ったランドマーク描画</h1>
+  <p>動画を選択すると、人物のランドマーク点のみが描画されます。</p>
+
+  <!-- 動画選択 -->
+  <input type="file" id="videoInput" accept="video/*">
+  <br><br>
+
+  <!-- Video 要素は非表示にして、Canvas で描画 -->
+  <video id="inputVideo" style="display:none;"></video>
+  <canvas id="outputCanvas"></canvas>
+
+  <!-- MediaPipe Pose ライブラリ -->
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
-  
   <script>
-    const fileInput = document.getElementById('videoFileInput');
-    const startButton = document.getElementById('startButton');
-    const fpsInput = document.getElementById('fpsInput');
-    const video = document.getElementById('video');
-    const canvas = document.getElementById('outputCanvas');
-    const ctx = canvas.getContext('2d');
-    
-    let pose;
-    
-    // MediaPipe Pose の初期化
-    function initPose() {
-      pose = new Pose({
+    (async function() {
+      const videoElement = document.getElementById('inputVideo');
+      const canvasElement = document.getElementById('outputCanvas');
+      const canvasCtx = canvasElement.getContext('2d');
+
+      // Pose インスタンスの初期化
+      const pose = new Pose({
         locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
       });
       pose.setOptions({
         modelComplexity: 1,
         smoothLandmarks: true,
-        minDetectionConfidence: 0.5,
-        minTrackingConfidence: 0.5
+        enableSegmentation: false,
+        smoothSegmentation: false,
+        selfieMode: false
       });
-      pose.onResults(onResults);
-    }
-    
-    // 解析結果を Canvas に点として描画
-    function onResults(results) {
-      // まずキャンバス全体をクリア
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      
-      if (!results.poseLandmarks) return;
-      // 各ランドマークを点で描画 (正規化座標 → Canvas 座標に変換)
-      for (const lm of results.poseLandmarks) {
-        const x = lm.x * canvas.width;
-        const y = lm.y * canvas.height;
-        ctx.beginPath();
-        ctx.arc(x, y, 5, 0, 2 * Math.PI);
-        ctx.fillStyle = 'red';
-        ctx.fill();
-      }
-    }
-    
-    // 動画フレームを解析用に送るループ
-    function startProcessing() {
-      const fps = parseInt(fpsInput.value) || 15;
-      const interval = 1000 / fps;
-      async function tick() {
-        if (!video.paused && !video.ended) {
-          await pose.send({ image: video });
+
+      // 結果コールバック
+      pose.onResults((results) => {
+        canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+        if (results.poseLandmarks) {
+          canvasCtx.fillStyle = 'red';
+          for (const landmark of results.poseLandmarks) {
+            const x = landmark.x * canvasElement.width;
+            const y = landmark.y * canvasElement.height;
+            canvasCtx.beginPath();
+            canvasCtx.arc(x, y, 5, 0, 2 * Math.PI);
+            canvasCtx.fill();
+          }
         }
-        setTimeout(tick, interval);
-      }
-      tick();
-    }
-    
-    // ファイル選択後の再生＆解析開始
-    startButton.addEventListener('click', () => {
-      const file = fileInput.files[0];
-      if (!file) {
-        alert('動画ファイルを選択してください');
-        return;
-      }
-      // 動画要素にファイルをセット
-      video.src = URL.createObjectURL(file);
-      video.onloadedmetadata = () => {
-        // Canvas を動画サイズに合わせる
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        video.play();
-        initPose();
-        startProcessing();
+      });
+
+      // ファイル選択時に動画を読み込んで再生開始
+      document.getElementById('videoInput').addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const url = URL.createObjectURL(file);
+        videoElement.src = url;
+        videoElement.play();
+      });
+
+      // 動画再生開始時に Canvas サイズを合わせて処理開始
+      videoElement.onplaying = () => {
+        canvasElement.width = videoElement.videoWidth;
+        canvasElement.height = videoElement.videoHeight;
+        requestAnimationFrame(processFrame);
       };
-    });
+
+      // 各フレームごとに Pose 解析を呼び出し
+      function processFrame() {
+        if (videoElement.paused || videoElement.ended) return;
+        pose.send({ image: videoElement });
+        requestAnimationFrame(processFrame);
+      }
+    })();
   </script>
+
+  <!--
+    GitHub Pages へのデプロイ方法:
+    1. このファイルを index.html としてリポジトリのルートに配置します。
+    2. GitHub 上でリポジトリの Settings > Pages を開き、Branch: main / folder: root を選択して保存。
+    3. https://<your-username>.github.io/<repository-name>/ にアクセスして動作確認。
+  -->
 </body>
 </html>
