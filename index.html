@@ -8,6 +8,7 @@
     body { font-family: sans-serif; text-align: center; }
     video { width: 45%; margin: 0 2%; background: #000; }
     #controls { margin: 1em; }
+    #peerSelect, #selectBtn { margin-left: 0.5em; }
   </style>
 </head>
 <body>
@@ -19,8 +20,12 @@
   </div>
 
   <p>あなたの PeerID: <span id="myId">—</span></p>
-  <p>相手の PeerID: <input type="text" id="peerIdInput" placeholder="相手のID"></p>
-  <button id="callBtn">接続する</button>
+  <!-- ユーザー側用: 待機中の計算ノード一覧 -->
+  <p id="peerListWrapper" style="display:none;">
+    相手の計算ノード:
+    <select id="peerSelect"></select>
+    <button id="selectBtn">接続</button>
+  </p>
 
   <div>
     <video id="localVideo" autoplay muted></video>
@@ -28,58 +33,68 @@
   </div>
 
   <script>
+    let role, peer, localStream;
     const myIdSpan = document.getElementById('myId');
+    const startBtn = document.getElementById('startBtn');
+    const peerListWrapper = document.getElementById('peerListWrapper');
+    const peerSelect = document.getElementById('peerSelect');
+    const selectBtn = document.getElementById('selectBtn');
     const localV = document.getElementById('localVideo');
     const remoteV = document.getElementById('remoteVideo');
-    const startBtn = document.getElementById('startBtn');
-    const callBtn  = document.getElementById('callBtn');
-    const peerIdIn = document.getElementById('peerIdInput');
-
-    let role, peer, localStream;
 
     startBtn.onclick = async () => {
       role = document.querySelector('input[name=role]:checked')?.value;
       if (!role) return alert('まず役割を選択してください');
+
       peer = new Peer({
-        host: '0.peerjs.com',    // PeerJS のクラウド
-        secure: true, port: 443,
+        host: '0.peerjs.com', secure: true, port: 443,
         config: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] }
       });
-      peer.on('open', id => myIdSpan.textContent = id);
 
-      if (role === 'user') {
-        localStream = await navigator.mediaDevices.getUserMedia({ video: true });
-        localV.srcObject = localStream;
-        // 相手からかかってきたら、自分の映像を返す
-        peer.on('call', call => {
-          call.answer(localStream);
-          call.on('stream', stream => { remoteV.srcObject = stream; });
-        });
-      } else {
-        // 計算側は初めにローカル映像無し。後で仮想カメラを取得
-        peer.on('call', async call => {
-          // 仮想カメラ (Python から流し込まれる) を取って answer
-          const cams = await navigator.mediaDevices.enumerateDevices();
-          const vc = cams.find(d => d.kind==='videoinput' && /VirtualCam|v4l2loopback/.test(d.label));
-          if (!vc) return alert('仮想カメラが見つかりません');
-          localStream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: vc.deviceId } });
+      peer.on('open', async id => {
+        myIdSpan.textContent = id;
+        if (role === 'user') {
+          // 待機中の計算ノードをリスト取得
+          const peers = await peer.listAllPeers();
+          const computes = peers.filter(pid => pid !== id);
+          if (computes.length === 0) {
+            peerSelect.innerHTML = '<option>待機中のノードなし</option>';
+          } else {
+            peerSelect.innerHTML = computes.map(pid => `<option value="${pid}">${pid}</option>`).join('');
+          }
+          peerListWrapper.style.display = 'block';
+
+          // 自分のカメラ映像を取得
+          localStream = await navigator.mediaDevices.getUserMedia({ video: true });
           localV.srcObject = localStream;
-          call.answer(localStream);
-          call.on('stream', stream => { remoteV.srcObject = stream; });
-        });
-      }
+
+          // 計算側から着信あれば応答
+          peer.on('call', call => {
+            call.answer(localStream);
+            call.on('stream', stream => remoteV.srcObject = stream);
+          });
+        } else {
+          // 計算側: 応答のみ
+          peer.on('call', async call => {
+            // 仮想カメラ選択
+            const cams = await navigator.mediaDevices.enumerateDevices();
+            const vc = cams.find(d => d.kind === 'videoinput' && /VirtualCam|v4l2loopback/.test(d.label));
+            if (!vc) return alert('仮想カメラが見つかりません');
+            localStream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: vc.deviceId } });
+            localV.srcObject = localStream;
+            call.answer(localStream);
+            call.on('stream', stream => remoteV.srcObject = stream);
+          });
+        }
+      });
     };
 
-    callBtn.onclick = () => {
-      const other = peerIdIn.value.trim();
-      if (!other) return;
-      if (role === 'user') {
-        const call = peer.call(other, localStream);
-        call.on('stream', stream => { remoteV.srcObject = stream; });
-      } else {
-        // 計算側からは呼び出さず、ユーザーから来るのを待つだけ
-        alert('計算側はユーザーからの呼び出しを待ってください');
-      }
+    selectBtn.onclick = () => {
+      const otherId = peerSelect.value;
+      if (!otherId) return alert('相手を選択してください');
+      // ユーザー側から呼び出し
+      const call = peer.call(otherId, localStream);
+      call.on('stream', stream => remoteV.srcObject = stream);
     };
   </script>
 </body>
