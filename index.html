@@ -2,40 +2,32 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <title>骨格推定 P2P デモ（待機リスト＋手動ID対応）</title>
+  <title>骨格推定 P2P デモ</title>
   <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
-
-  <!-- Firebase (compat) -->
-  <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-app-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-firestore-compat.js"></script>
-
   <style>
     body { font-family: sans-serif; text-align: center; }
     video { width: 45%; margin: 0 2%; background: #000; }
     #controls { margin: 1em; }
-    #computeList, #manualIdInput { min-width: 200px; margin: 0.5em; }
+    #availableComputes { margin-top: 1em; font-size: 0.9em; color: #333; }
   </style>
 </head>
 <body>
   <h1>骨格推定 P2P デモ</h1>
-
   <div id="controls">
     <label><input type="radio" name="role" value="compute"> 計算</label>
     <label><input type="radio" name="role" value="user"> ユーザー</label>
     <button id="startBtn">開始</button>
-
-    <div id="userControls" style="display:none; margin-top:1em;">
-      <p>待機中の計算PC：</p>
-      <select id="computeList">
-        <option>待機中なし</option>
-      </select>
-      <p>または PeerID を入力：</p>
-      <input type="text" id="manualIdInput" placeholder="手動でID入力">
-      <button id="callBtn">接続する</button>
-    </div>
   </div>
 
   <p>あなたの PeerID: <span id="myId">—</span></p>
+
+  <!-- ユーザー側のみ表示 -->
+  <div id="userControls" style="display:none;">
+    <p>待機中の計算側ID:</p>
+    <div id="availableComputes">なし</div>
+    <p>接続したい計算側のIDをクリックして選択:</p>
+    <div id="computeListContainer"></div>
+  </div>
 
   <div>
     <video id="localVideo" autoplay muted></video>
@@ -43,97 +35,98 @@
   </div>
 
   <script>
-    // === Firebase 初期化（ご自身のプロジェクト設定に置き換えてください） ===
-    const firebaseConfig = {
-      apiKey: "●●●",
-      authDomain: "●●●.firebaseapp.com",
-      projectId: "●●●",
-    };
-    firebase.initializeApp(firebaseConfig);
-    const db = firebase.firestore();
-    const COMPUTE_COLLECTION = "waiting_computes";
+    const myIdSpan = document.getElementById('myId');
+    const startBtn   = document.getElementById('startBtn');
+    const userCtrls  = document.getElementById('userControls');
+    const availDiv   = document.getElementById('availableComputes');
+    const listCont   = document.getElementById('computeListContainer');
+    const localV     = document.getElementById('localVideo');
+    const remoteV    = document.getElementById('remoteVideo');
 
-    const startBtn     = document.getElementById('startBtn');
-    const callBtn      = document.getElementById('callBtn');
-    const computeList  = document.getElementById('computeList');
-    const manualInput  = document.getElementById('manualIdInput');
-    const userControls = document.getElementById('userControls');
-    const myIdSpan     = document.getElementById('myId');
-    const localV       = document.getElementById('localVideo');
-    const remoteV      = document.getElementById('remoteVideo');
-
-    let role, peer, localStream, unsubscribeListener;
+    let role, peer, localStream, pollingInterval;
 
     startBtn.onclick = async () => {
+      // 役割取得
       role = document.querySelector('input[name=role]:checked')?.value;
-      if (!role) return alert('まず役割を選択してください');
+      if (!role) return alert('まず「計算」か「ユーザー」を選択してください');
 
-      peer = new Peer({
+      // 役割に応じて UI 切り替え
+      if (role === 'user') {
+        userCtrls.style.display = 'block';
+      }
+
+      // PeerJS 初期化
+      const peerOpts = {
         host: '0.peerjs.com', secure: true, port: 443,
         config: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] }
-      });
-      peer.on('open', id => {
+      };
+
+      if (role === 'compute') {
+        // compute は固定プレフィックス付き ID で生成
+        const id = 'compute-' + Math.random().toString(36).substr(2, 8);
+        peer = new Peer(id, peerOpts);
+      } else {
+        peer = new Peer(peerOpts);
+      }
+
+      // open イベント
+      peer.on('open', async id => {
         myIdSpan.textContent = id;
-        if (role === 'compute') registerCompute(id);
-        if (role === 'user')    setupUserListener();
-      });
 
-      if (role === 'user') {
-        userControls.style.display = 'block';
-        localStream = await navigator.mediaDevices.getUserMedia({ video: true });
-        localV.srcObject = localStream;
-      } else {
-        peer.on('call', async call => {
-          const cams = await navigator.mediaDevices.enumerateDevices();
-          const vc = cams.find(d => d.kind==='videoinput' && /VirtualCam|v4l2loopback/.test(d.label));
-          if (!vc) return alert('仮想カメラが見つかりません');
-          localStream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: vc.deviceId } });
+        if (role === 'compute') {
+          // 計算側：ユーザーからの呼び出しを待つだけ
+          peer.on('call', async call => {
+            // 仮想カメラを探してストリームを返答
+            const devices = await navigator.mediaDevices.enumerateDevices();
+            const vc = devices.find(d => d.kind==='videoinput' && /VirtualCam|v4l2loopback/.test(d.label));
+            if (!vc) return alert('仮想カメラが見つかりません');
+            const stream = await navigator.mediaDevices.getUserMedia({ video:{ deviceId: vc.deviceId } });
+            localV.srcObject = stream;
+            call.answer(stream);
+            call.on('stream', s => { remoteV.srcObject = s; });
+          });
+        } else {
+          // ユーザー側：自分カメラ取得＆開始
+          localStream = await navigator.mediaDevices.getUserMedia({ video: true });
           localV.srcObject = localStream;
-          call.answer(localStream);
-          call.on('stream', s => remoteV.srcObject = s);
-        });
-      }
+
+          // 待機中の計算側をリスト表示し、クリックで接続
+          startPollingComputes();
+        }
+      });
     };
 
-    function registerCompute(id) {
-      const docRef = db.collection(COMPUTE_COLLECTION).doc(id);
-      docRef.set({ ts: firebase.firestore.FieldValue.serverTimestamp() });
-      window.addEventListener('beforeunload', () => docRef.delete());
+    // 計算側ID一覧を 5秒ごとに取得・更新
+    function startPollingComputes() {
+      updateComputeList();
+      pollingInterval = setInterval(updateComputeList, 5000);
     }
 
-    function setupUserListener() {
-      unsubscribeListener = db.collection(COMPUTE_COLLECTION)
-        .orderBy('ts', 'desc')
-        .onSnapshot(snap => {
-          const list = [];
-          snap.forEach(doc => { if (list.length < 10) list.push(doc.id); });
-          computeList.innerHTML = '';
-          if (list.length === 0) {
-            computeList.innerHTML = '<option>待機中なし</option>';
-          } else {
-            list.forEach(id => {
-              const opt = document.createElement('option');
-              opt.value = id;
-              opt.textContent = id;
-              computeList.appendChild(opt);
-            });
-          }
+    function updateComputeList() {
+      peer.listAllPeers(peers => {
+        const computes = peers.filter(id => id.startsWith('compute-'));
+        // 表示
+        availDiv.textContent = computes.length ? computes.join(', ') : 'なし';
+        // クリック可能リスト
+        listCont.innerHTML = '';
+        computes.forEach(id => {
+          const btn = document.createElement('button');
+          btn.textContent = id;
+          btn.style.margin = '0 4px 4px 0';
+          btn.onclick = () => connectToCompute(id);
+          listCont.appendChild(btn);
         });
+      });
     }
 
-    callBtn.onclick = () => {
-      const manual = manualInput.value.trim();
-      let target = '';
-      if (manual) {
-        target = manual;
-      } else if (computeList.value && computeList.value !== '待機中なし') {
-        target = computeList.value;
-      } else {
-        return alert('接続先がありません');
-      }
-      const call = peer.call(target, localStream);
-      call.on('stream', stream => { remoteV.srcObject = stream; });
-    };
+    // 選択した計算側に自分のカメラ映像を送る
+    function connectToCompute(computeId) {
+      if (!localStream) return;
+      const call = peer.call(computeId, localStream);
+      call.on('stream', s => { remoteV.srcObject = s; });
+      // もうポーリングは不要
+      clearInterval(pollingInterval);
+    }
   </script>
 </body>
 </html>
