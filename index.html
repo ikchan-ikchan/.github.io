@@ -2,30 +2,36 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <title>骨格推定 P2P デモ</title>
+  <title>骨格推定 P2P デモ（待機リスト対応）</title>
   <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
+
+  <!-- Firebase (compat) -->
+  <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-firestore-compat.js"></script>
+
   <style>
     body { font-family: sans-serif; text-align: center; }
     video { width: 45%; margin: 0 2%; background: #000; }
     #controls { margin: 1em; }
-    #peerListWrapper, #peerSelect, #selectBtn { margin-left: 0.5em; }
+    #computeList { min-width: 200px; }
   </style>
 </head>
 <body>
   <h1>骨格推定 P2P デモ</h1>
+
   <div id="controls">
     <label><input type="radio" name="role" value="compute"> 計算</label>
     <label><input type="radio" name="role" value="user"> ユーザー</label>
     <button id="startBtn">開始</button>
+    <div id="userControls" style="display:none; margin-top:1em;">
+      <select id="computeList">
+        <option>待機中なし</option>
+      </select>
+      <button id="callBtn">接続する</button>
+    </div>
   </div>
 
   <p>あなたの PeerID: <span id="myId">—</span></p>
-  <!-- ユーザー側用: 待機中の計算ノード一覧 -->
-  <p id="peerListWrapper" style="display:none;">
-    相手の計算ノード:
-    <select id="peerSelect"></select>
-    <button id="selectBtn">接続</button>
-  </p>
 
   <div>
     <video id="localVideo" autoplay muted></video>
@@ -33,65 +39,96 @@
   </div>
 
   <script>
-    let role, peer, localStream;
-    const myIdSpan = document.getElementById('myId');
-    const startBtn = document.getElementById('startBtn');
-    const peerListWrapper = document.getElementById('peerListWrapper');
-    const peerSelect = document.getElementById('peerSelect');
-    const selectBtn = document.getElementById('selectBtn');
-    const localV = document.getElementById('localVideo');
-    const remoteV = document.getElementById('remoteVideo');
+    // === Firebase 初期化（ご自身のプロジェクト設定に置き換えてください） ===
+    const firebaseConfig = {
+      apiKey: "●●●",
+      authDomain: "●●●.firebaseapp.com",
+      projectId: "●●●",
+    };
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.firestore();
+    const COMPUTE_COLLECTION = "waiting_computes";
 
+    const startBtn    = document.getElementById('startBtn');
+    const callBtn     = document.getElementById('callBtn');
+    const computeList = document.getElementById('computeList');
+    const userControls= document.getElementById('userControls');
+    const myIdSpan    = document.getElementById('myId');
+    const localV      = document.getElementById('localVideo');
+    const remoteV     = document.getElementById('remoteVideo');
+
+    let role, peer, localStream, unsubscribeListener;
+
+    // 開始ボタン
     startBtn.onclick = async () => {
       role = document.querySelector('input[name=role]:checked')?.value;
       if (!role) return alert('まず役割を選択してください');
 
-      peer = new Peer({
-        host: '0.peerjs.com', secure: true, port: 443,
-        config: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] }
-      });
-
-      peer.on('open', async id => {
+      // PeerJS インスタンス生成
+      peer = new Peer({ host:'0.peerjs.com', secure:true, port:443,
+                        config:{ iceServers:[{ urls:'stun:stun.l.google.com:19302' }] } });
+      peer.on('open', id => {
         myIdSpan.textContent = id;
-        if (role === 'user') {
-          // 待機中の計算ノードをリスト取得
-          const peers = await peer.listAllPeers();
-          const computes = peers.filter(pid => pid !== id);
-          peerSelect.innerHTML = computes.length > 0
-            ? computes.map(pid => `<option value="${pid}">${pid}</option>`).join('')
-            : '<option value="">なし</option>';
-          peerListWrapper.style.display = 'block';
-
-          // 自分のカメラ映像を取得
-          localStream = await navigator.mediaDevices.getUserMedia({ video: true });
-          localV.srcObject = localStream;
-
-          // 計算側から着信あれば応答
-          peer.on('call', call => {
-            call.answer(localStream);
-            call.on('stream', stream => remoteV.srcObject = stream);
-          });
-        } else {
-          // 計算側: 応答のみ
-          peer.on('call', async call => {
-            // 仮想カメラ選択
-            const cams = await navigator.mediaDevices.enumerateDevices();
-            const vc = cams.find(d => d.kind === 'videoinput' && /VirtualCam|v4l2loopback/.test(d.label));
-            if (!vc) return alert('仮想カメラが見つかりません');
-            localStream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: vc.deviceId } });
-            localV.srcObject = localStream;
-            call.answer(localStream);
-            call.on('stream', stream => remoteV.srcObject = stream);
-          });
-        }
+        if (role === 'compute') registerCompute(id);
+        if (role === 'user')    setupUserListener();
       });
+
+      // 役割ごとの準備
+      if (role === 'user') {
+        userControls.style.display = 'block';
+        localStream = await navigator.mediaDevices.getUserMedia({ video:true });
+        localV.srcObject = localStream;
+      } else {
+        // 計算側は仮想カメラ取得まで待機
+        peer.on('call', async call => {
+          // 仮想カメラを探して取得
+          const cams = await navigator.mediaDevices.enumerateDevices();
+          const vc = cams.find(d=>d.kind==='videoinput' && /VirtualCam|v4l2loopback/.test(d.label));
+          localStream = await navigator.mediaDevices.getUserMedia({ video:{ deviceId:vc.deviceId } });
+          localV.srcObject = localStream;
+          call.answer(localStream);
+          call.on('stream', s=> remoteV.srcObject = s);
+        });
+      }
     };
 
-    selectBtn.onclick = () => {
-      const otherId = peerSelect.value;
-      if (!otherId) return alert('相手を選択してください');
-      // ユーザー側から呼び出し
-      const call = peer.call(otherId, localStream);
+    // 「計算」ロールは起動時に Firestore に登録し、落ちたら解除
+    function registerCompute(id) {
+      const docRef = db.collection(COMPUTE_COLLECTION).doc(id);
+      docRef.set({ ts: firebase.firestore.FieldValue.serverTimestamp() });
+      window.addEventListener('beforeunload', ()=> docRef.delete());
+    }
+
+    // 「ユーザー」ロールは Firestore から待機中 compute をリスニング
+    function setupUserListener(){
+      unsubscribeListener = db.collection(COMPUTE_COLLECTION)
+        .orderBy('ts', 'desc')
+        .onSnapshot(snap => {
+          // 最新 10 件を取得
+          const list = [];
+          snap.forEach(doc => {
+            list.push(doc.id);
+            if (list.length >= 10) return;
+          });
+          computeList.innerHTML = '';
+          if (list.length === 0) {
+            computeList.innerHTML = '<option>待機中なし</option>';
+          } else {
+            list.forEach(id => {
+              const opt = document.createElement('option');
+              opt.value = id;
+              opt.textContent = id;
+              computeList.appendChild(opt);
+            });
+          }
+        });
+    }
+
+    // 接続ボタン
+    callBtn.onclick = () => {
+      const target = computeList.value;
+      if (!target || target === '待機中なし') return alert('接続先がありません');
+      const call = peer.call(target, localStream);
       call.on('stream', stream => remoteV.srcObject = stream);
     };
   </script>
