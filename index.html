@@ -8,7 +8,7 @@
     body { font-family: sans-serif; text-align: center; }
     video { width: 45%; margin: 0 2%; background: #000; }
     #controls { margin: 1em; }
-    #peerSelect, #selectBtn { margin-left: 0.5em; }
+    #peerListWrapper, #peerSelect, #selectBtn { margin-left: 0.5em; }
   </style>
 </head>
 <body>
@@ -57,11 +57,9 @@
           // 待機中の計算ノードをリスト取得
           const peers = await peer.listAllPeers();
           const computes = peers.filter(pid => pid !== id);
-          if (computes.length === 0) {
-            peerSelect.innerHTML = '<option>待機中のノードなし</option>';
-          } else {
-            peerSelect.innerHTML = computes.map(pid => `<option value="${pid}">${pid}</option>`).join('');
-          }
+          peerSelect.innerHTML = computes.length > 0
+            ? computes.map(pid => `<option value="${pid}">${pid}</option>`).join('')
+            : '<option value="">なし</option>';
           peerListWrapper.style.display = 'block';
 
           // 自分のカメラ映像を取得
