@@ -2,12 +2,14 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>骨格推定 P2P デモ</title>
   <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
   <style>
     body { font-family: sans-serif; text-align: center; }
     video { width: 45%; margin: 0 2%; background: #000; }
     #controls { margin: 1em; }
+    #callBtn { margin-top: 0.5em; }
   </style>
 </head>
 <body>
@@ -16,13 +18,15 @@
     <label><input type="radio" name="role" value="compute"> 計算</label>
     <label><input type="radio" name="role" value="user"> ユーザー</label>
     <br>
-    部屋番号（4桁など何でもOK）：<input type="text" id="roomCode" placeholder="1234">
+    部屋番号（例: 1234）：<input type="text" id="roomCode" placeholder="1234">
     <button id="startBtn">開始</button>
   </div>
 
   <p>あなたの ID: <span id="myId">—</span></p>
-  <p>相手と同じ部屋番号を入力して「接続」ボタン</p>
-  <button id="callBtn">接続</button>
+  <p id="callArea">
+    相手と同じ部屋番号を入力して
+    <button id="callBtn">接続</button>
+  </p>
 
   <div>
     <video id="localVideo" autoplay muted></video>
@@ -31,59 +35,71 @@
 
   <script>
     const myIdSpan = document.getElementById('myId');
-    const localV = document.getElementById('localVideo');
-    const remoteV = document.getElementById('remoteVideo');
+    const localV   = document.getElementById('localVideo');
+    const remoteV  = document.getElementById('remoteVideo');
     const startBtn = document.getElementById('startBtn');
     const callBtn  = document.getElementById('callBtn');
+    const callArea = document.getElementById('callArea');
     const roomIn   = document.getElementById('roomCode');
 
     let role, peer, localStream, roomCode;
 
     startBtn.onclick = async () => {
-      role = document.querySelector('input[name=role]:checked')?.value;
+      role     = document.querySelector('input[name=role]:checked')?.value;
       roomCode = roomIn.value.trim();
-      if (!role)       return alert('先に「計算」か「ユーザー」を選択して下さい');
-      if (!roomCode)   return alert('部屋番号を入力して下さい');
-      // PeerJS ID を role-roomCode に
+      if (!role)     return alert('先に「計算」か「ユーザー」を選択して下さい');
+      if (!roomCode) return alert('部屋番号を入力して下さい');
+
+      // 「接続」ボタンの表示制御
+      if (role === 'compute') {
+        callArea.style.display = 'none';  // 計算側は呼び出しなし
+      } else {
+        callArea.style.display = 'block';
+      }
+
+      // PeerJS ID を role-roomCode として作成
       const myPeerId = `${role}-${roomCode}`;
       peer = new Peer(myPeerId, {
         host: '0.peerjs.com', secure: true, port: 443,
         config: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] }
       });
-      peer.on('open', id => myIdSpan.textContent = id);
+
+      peer.on('open', id => {
+        myIdSpan.textContent = id;
+      });
 
       if (role === 'user') {
+        // ユーザー側：カメラ取得 & かける
         localStream = await navigator.mediaDevices.getUserMedia({ video: true });
         localV.srcObject = localStream;
         peer.on('call', call => {
           call.answer(localStream);
-          call.on('stream', s => remoteV.srcObject = s);
+          call.on('stream', s => { remoteV.srcObject = s; });
         });
       } else {
-        // 計算側は後で仮想カメラから取得して応答
+        // 計算側：仮想カメラ取得 & 待機
         peer.on('call', async call => {
           const cams = await navigator.mediaDevices.enumerateDevices();
-          const vc = cams.find(d => d.kind==='videoinput' &&
-                    /VirtualCam|v4l2loopback/.test(d.label));
-          if (!vc) return alert('仮想カメラが見つかりません');
-          localStream = await navigator.mediaDevices.getUserMedia({
-            video: { deviceId: vc.deviceId }
-          });
+          const vc = cams.find(d => d.kind==='videoinput' && /VirtualCam|v4l2loopback/.test(d.label));
+          if (!vc) {
+            alert('仮想カメラが見つかりません');
+            return;
+          }
+          localStream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: vc.deviceId } });
           localV.srcObject = localStream;
           call.answer(localStream);
-          call.on('stream', s => remoteV.srcObject = s);
+          call.on('stream', s => { remoteV.srcObject = s; });
         });
       }
     };
 
     callBtn.onclick = () => {
       if (!peer || !roomCode) return alert('先に「開始」してください');
-      // 相手の role を逆にして部屋番号と組み立て
       const targetRole = role === 'user' ? 'compute' : 'user';
       const targetId   = `${targetRole}-${roomCode}`;
       if (role === 'user') {
         const call = peer.call(targetId, localStream);
-        call.on('stream', s => remoteV.srcObject = s);
+        call.on('stream', s => { remoteV.srcObject = s; });
       } else {
         alert('計算側はユーザーからの呼び出しを待ってください');
       }
