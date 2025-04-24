@@ -2,40 +2,25 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <title>骨格推定 P2P デモ（待機リスト＋手動ID対応）</title>
+  <title>骨格推定 P2P デモ</title>
   <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
-
-  <!-- Firebase (compat) -->
-  <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-app-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-firestore-compat.js"></script>
-
   <style>
     body { font-family: sans-serif; text-align: center; }
     video { width: 45%; margin: 0 2%; background: #000; }
     #controls { margin: 1em; }
-    #computeList, #manualIdInput { min-width: 200px; margin: 0.5em; }
   </style>
 </head>
 <body>
   <h1>骨格推定 P2P デモ</h1>
-
   <div id="controls">
     <label><input type="radio" name="role" value="compute"> 計算</label>
     <label><input type="radio" name="role" value="user"> ユーザー</label>
     <button id="startBtn">開始</button>
-
-    <div id="userControls" style="display:none; margin-top:1em;">
-      <p>待機中の計算PC：</p>
-      <select id="computeList">
-        <option>待機中なし</option>
-      </select>
-      <p>または PeerID を入力：</p>
-      <input type="text" id="manualIdInput" placeholder="手動でID入力">
-      <button id="callBtn">接続する</button>
-    </div>
   </div>
 
   <p>あなたの PeerID: <span id="myId">—</span></p>
+  <p>相手の PeerID: <input type="text" id="peerIdInput" placeholder="相手のID"></p>
+  <button id="callBtn">接続する</button>
 
   <div>
     <video id="localVideo" autoplay muted></video>
@@ -43,96 +28,58 @@
   </div>
 
   <script>
-    // === Firebase 初期化（ご自身のプロジェクト設定に置き換えてください） ===
-    const firebaseConfig = {
-      apiKey: "●●●",
-      authDomain: "●●●.firebaseapp.com",
-      projectId: "●●●",
-    };
-    firebase.initializeApp(firebaseConfig);
-    const db = firebase.firestore();
-    const COMPUTE_COLLECTION = "waiting_computes";
+    const myIdSpan = document.getElementById('myId');
+    const localV = document.getElementById('localVideo');
+    const remoteV = document.getElementById('remoteVideo');
+    const startBtn = document.getElementById('startBtn');
+    const callBtn  = document.getElementById('callBtn');
+    const peerIdIn = document.getElementById('peerIdInput');
 
-    const startBtn     = document.getElementById('startBtn');
-    const callBtn      = document.getElementById('callBtn');
-    const computeList  = document.getElementById('computeList');
-    const manualInput  = document.getElementById('manualIdInput');
-    const userControls = document.getElementById('userControls');
-    const myIdSpan     = document.getElementById('myId');
-    const localV       = document.getElementById('localVideo');
-    const remoteV      = document.getElementById('remoteVideo');
-
-    let role, peer, localStream, unsubscribeListener;
+    let role, peer, localStream;
 
     startBtn.onclick = async () => {
       role = document.querySelector('input[name=role]:checked')?.value;
       if (!role) return alert('まず役割を選択してください');
-
       peer = new Peer({
-        host: '0.peerjs.com', secure: true, port: 443,
+        host: '0.peerjs.com',    // PeerJS のクラウド
+        secure: true, port: 443,
         config: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] }
       });
-      peer.on('open', id => {
-        myIdSpan.textContent = id;
-        if (role === 'compute') registerCompute(id);
-        if (role === 'user')    setupUserListener();
-      });
+      peer.on('open', id => myIdSpan.textContent = id);
 
       if (role === 'user') {
-        userControls.style.display = 'block';
         localStream = await navigator.mediaDevices.getUserMedia({ video: true });
         localV.srcObject = localStream;
+        // 相手からかかってきたら、自分の映像を返す
+        peer.on('call', call => {
+          call.answer(localStream);
+          call.on('stream', stream => { remoteV.srcObject = stream; });
+        });
       } else {
+        // 計算側は初めにローカル映像無し。後で仮想カメラを取得
         peer.on('call', async call => {
+          // 仮想カメラ (Python から流し込まれる) を取って answer
           const cams = await navigator.mediaDevices.enumerateDevices();
           const vc = cams.find(d => d.kind==='videoinput' && /VirtualCam|v4l2loopback/.test(d.label));
           if (!vc) return alert('仮想カメラが見つかりません');
           localStream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: vc.deviceId } });
           localV.srcObject = localStream;
           call.answer(localStream);
-          call.on('stream', s => remoteV.srcObject = s);
+          call.on('stream', stream => { remoteV.srcObject = stream; });
         });
       }
     };
 
-    function registerCompute(id) {
-      const docRef = db.collection(COMPUTE_COLLECTION).doc(id);
-      docRef.set({ ts: firebase.firestore.FieldValue.serverTimestamp() });
-      window.addEventListener('beforeunload', () => docRef.delete());
-    }
-
-    function setupUserListener() {
-      unsubscribeListener = db.collection(COMPUTE_COLLECTION)
-        .orderBy('ts', 'desc')
-        .onSnapshot(snap => {
-          const list = [];
-          snap.forEach(doc => { if (list.length < 10) list.push(doc.id); });
-          computeList.innerHTML = '';
-          if (list.length === 0) {
-            computeList.innerHTML = '<option>待機中なし</option>';
-          } else {
-            list.forEach(id => {
-              const opt = document.createElement('option');
-              opt.value = id;
-              opt.textContent = id;
-              computeList.appendChild(opt);
-            });
-          }
-        });
-    }
-
     callBtn.onclick = () => {
-      const manual = manualInput.value.trim();
-      let target = '';
-      if (manual) {
-        target = manual;
-      } else if (computeList.value && computeList.value !== '待機中なし') {
-        target = computeList.value;
+      const other = peerIdIn.value.trim();
+      if (!other) return;
+      if (role === 'user') {
+        const call = peer.call(other, localStream);
+        call.on('stream', stream => { remoteV.srcObject = stream; });
       } else {
-        return alert('接続先がありません');
+        // 計算側からは呼び出さず、ユーザーから来るのを待つだけ
+        alert('計算側はユーザーからの呼び出しを待ってください');
       }
-      const call = peer.call(target, localStream);
-      call.on('stream', stream => { remoteV.srcObject = stream; });
     };
   </script>
 </body>
