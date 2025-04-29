@@ -2,96 +2,136 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <title>骨格推定 P2P デモ</title>
+  <title>骨格推定 P2P タイマーテスト</title>
   <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
   <style>
     body { font-family: sans-serif; text-align: center; }
     video { width: 45%; margin: 0 2%; background: #000; }
     #controls { margin: 1em; }
+    #status { color: red; white-space: pre-wrap; text-align: left; }
+    canvas { display: none; } /* デバッグで見たい場合は block に */
   </style>
 </head>
 <body>
-  <h1>骨格推定 P2P デモ</h1>
+  <h1>骨格推定 P2P タイマーテスト</h1>
   <div id="controls">
-    <label><input type="radio" name="role" value="compute"> 計算</label>
+    <label><input type="radio" name="role" value="compute"> 計算 (Timer)</label>
     <label><input type="radio" name="role" value="user"> ユーザー</label><br>
     部屋番号：<input type="text" id="roomCode" placeholder="1234">
     <button id="startBtn">開始</button>
     <button id="callBtn">接続</button>
   </div>
-
-  <p>あなたの ID: <span id="myId">—</span></p>
+  <div id="status">[INFO] Ready</div>
+  <p>あなたの PeerID: <span id="myId">—</span></p>
   <div>
-    <video id="localVideo" autoplay muted></video>
-    <video id="remoteVideo" autoplay></video>
+    <video id="localVideo" autoplay muted playsinline></video>
+    <video id="remoteVideo" autoplay playsinline></video>
   </div>
+  <!-- タイマー描画用キャンバス -->
+  <canvas id="timerCanvas" width="640" height="360"></canvas>
 
   <script>
-    const myIdSpan = document.getElementById('myId');
-    const localV   = document.getElementById('localVideo');
-    const remoteV  = document.getElementById('remoteVideo');
+    const log = msg => {
+      console.log(msg);
+      document.getElementById('status').textContent += '\n' + msg;
+    };
+    const status   = document.getElementById('status');
     const startBtn = document.getElementById('startBtn');
     const callBtn  = document.getElementById('callBtn');
     const roomIn   = document.getElementById('roomCode');
+    const myId     = document.getElementById('myId');
+    const localV   = document.getElementById('localVideo');
+    const remoteV  = document.getElementById('remoteVideo');
+    const canvas   = document.getElementById('timerCanvas');
+    const ctx      = canvas.getContext('2d');
 
     let role, peer, localStream, roomCode;
 
-    // 「開始」ボタンで役割決定＆PeerJS初期化
     startBtn.onclick = async () => {
+      status.textContent = '[INFO] Starting…';
       role     = document.querySelector('input[name=role]:checked')?.value;
       roomCode = roomIn.value.trim();
-      if (!role)     return alert('先に「計算」か「ユーザー」を選択してください');
-      if (!roomCode) return alert('部屋番号を入力してください');
+      if (!role)     return log('[ERROR] 先に「計算」か「ユーザー」を選択');
+      if (!roomCode) return log('[ERROR] 部屋番号を入力してください');
 
-      // PeerJS ID を role-roomCode で生成
+      // PeerJS 初期化
       peer = new Peer(`${role}-${roomCode}`, {
         host: '0.peerjs.com', secure: true, port: 443,
         config: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] }
       });
-      peer.on('open', id => myIdSpan.textContent = id);
+      peer.on('open', id => {
+        myId.textContent = id;
+        log(`[INFO] Peer opened: ${id}`);
+      });
+      peer.on('error', err => log(`[ERROR] PeerJS: ${err}`));
 
-      if (role === 'user') {
-        // ユーザー側：自分のカメラを取得して通話開始を待つ
-        localStream = await navigator.mediaDevices.getUserMedia({ video: true });
+      if (role === 'compute') {
+        // 計算側は“タイマー映像”を生成し続ける
+        callBtn.style.display = 'none';
+
+        // キャンバス→MediaStream
+        const fps = 5;
+        localStream = canvas.captureStream(fps);
         localV.srcObject = localStream;
+        log('[INFO] Timer stream ready');
+
+        // タイマー描画ループ
+        setInterval(() => {
+          const now = new Date();
+          const txt = now.toLocaleTimeString();
+          ctx.fillStyle = 'black';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.fillStyle = 'lime';
+          ctx.font = '48px monospace';
+          ctx.fillText(txt, 50, canvas.height / 2);
+        }, 1000 / fps);
+
+        // 着信があったらタイマーストリームで応答
         peer.on('call', call => {
+          log('[INFO] Incoming call, answering with timer');
           call.answer(localStream);
-          call.on('stream', s => remoteV.srcObject = s);
+          call.on('stream', s => {
+            // ここにはユーザー映像が来る
+            remoteV.srcObject = s;
+            log('[INFO] Received user stream');
+          });
         });
       } else {
-        // 計算側：接続ボタンは非表示にし、ユーザーからの呼び出しを待つ
-        callBtn.style.display = 'none';
-        peer.on('call', async call => {
-          // 仮想カメラを探して取得
-          const cams = await navigator.mediaDevices.enumerateDevices();
-          const vc = cams.find(d =>
-            d.kind === 'videoinput' &&
-            /VirtualCam|OBS Virtual Camera|Unity Capture/.test(d.label)
-          );
-          if (!vc) {
-            alert('仮想カメラが見つかりません');
-            return;
-          }
-          localStream = await navigator.mediaDevices.getUserMedia({
-            video: { deviceId: vc.deviceId }
-          });
+        // ユーザー側
+        try {
+          localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
           localV.srcObject = localStream;
+          log('[INFO] Local camera ready');
+        } catch (e) {
+          return log(`[ERROR] getUserMedia: ${e}`);
+        }
+        peer.on('call', call => {
+          // 応答不要（基本 compute から呼び出される）
           call.answer(localStream);
-          call.on('stream', s => remoteV.srcObject = s);
+          call.on('stream', s => {
+            remoteV.srcObject = s;
+            log('[INFO] Received timer stream');
+          });
         });
       }
     };
 
-    // 「接続」ボタンはユーザー側のみが使う
     callBtn.onclick = () => {
-      if (!peer || !roomCode) return alert('先に開始してください');
-      const targetRole = role === 'user' ? 'compute' : 'user';
-      const targetId   = `${targetRole}-${roomCode}`;
-      if (role === 'user') {
-        const call = peer.call(targetId, localStream);
-        call.on('stream', s => remoteV.srcObject = s);
-      } else {
-        alert('計算側はユーザーからの呼び出しを待ってください');
+      status.textContent = '[INFO] Connecting…';
+      if (!peer || !roomCode) return log('[ERROR] 先に開始してください');
+      const target = role === 'user'
+        ? `compute-${roomCode}`
+        : `user-${roomCode}`;
+      log(`[INFO] Calling ${target}`);
+      try {
+        const call = peer.call(target, localStream);
+        call.on('stream', s => {
+          remoteV.srcObject = s;
+          log('[INFO] Received remote stream');
+        });
+        call.on('error', e => log(`[ERROR] call error: ${e}`));
+      } catch (e) {
+        log(`[ERROR] peer.call failed: ${e}`);
       }
     };
   </script>
