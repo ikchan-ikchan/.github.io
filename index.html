@@ -2,21 +2,26 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <title>骨格推定 P2P（VCキャプチャ修正版）</title>
+  <title>骨格推定 P2P カメラ選択版</title>
   <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
   <style>
     body { font-family: sans-serif; text-align: center; }
-    video { width:45%; margin:0 2%; background:#000 }
+    video { width:45%; margin:0 2%; background:#000; }
     #controls { margin:1em; }
     #status { color:red; white-space:pre-wrap; text-align:left; }
   </style>
 </head>
 <body>
-  <h1>骨格推定 P2P（VCキャプチャ修正版）</h1>
+  <h1>骨格推定 P2P （カメラ選択）</h1>
   <div id="controls">
     <label><input type="radio" name="role" value="compute"> 計算</label>
     <label><input type="radio" name="role" value="user"> ユーザー</label><br>
     部屋番号：<input type="text" id="roomCode" placeholder="1234"><br>
+    <!-- ユーザー側だけ表示 -->
+    <div id="cameraSelectWrapper" style="display:none; margin-top:8px;">
+      カメラを選択：
+      <select id="cameraSelect"></select>
+    </div>
     <button id="startBtn">開始</button>
     <button id="callBtn">接続</button>
   </div>
@@ -32,6 +37,9 @@
       console.log(msg);
       document.getElementById('status').textContent += '\n'+msg;
     };
+    const roleEls  = document.getElementsByName('role');
+    const camWrap  = document.getElementById('cameraSelectWrapper');
+    const camSel   = document.getElementById('cameraSelect');
     const startBtn = document.getElementById('startBtn');
     const callBtn  = document.getElementById('callBtn');
     const roomIn   = document.getElementById('roomCode');
@@ -41,10 +49,41 @@
 
     let role, peer, localStream, roomCode;
 
+    // 「ユーザー」を選ぶとカメラ選択UIを出す
+    roleEls.forEach(el => el.addEventListener('change', () => {
+      if (el.checked && el.value === 'user') {
+        camWrap.style.display = 'inline-block';
+        populateCameras();
+      } else if (el.checked) {
+        camWrap.style.display = 'none';
+      }
+    }));
+
+    async function populateCameras() {
+      try {
+        // 一度権限を得るためダミーで取得&停止
+        const tmp = await navigator.mediaDevices.getUserMedia({video:true});
+        tmp.getTracks().forEach(t=>t.stop());
+      } catch(_) {
+        log('[WARN] カメラ許可が必要です');
+      }
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      camSel.innerHTML = '';
+      devices.filter(d=>d.kind==='videoinput')
+        .forEach(d => {
+          const o = document.createElement('option');
+          o.value = d.deviceId;
+          o.text  = d.label || d.deviceId;
+          camSel.appendChild(o);
+        });
+      log('[INFO] カメラ一覧を更新');
+    }
+
     startBtn.onclick = async () => {
+      status.textContent = '[INFO] Starting…';
       role     = document.querySelector('input[name=role]:checked')?.value;
       roomCode = roomIn.value.trim();
-      if (!role)     return log('[ERROR] 先に「計算」か「ユーザー」を選択してください');
+      if (!role)     return log('[ERROR] 先に役割を選択してください');
       if (!roomCode) return log('[ERROR] 部屋番号を入力してください');
 
       peer = new Peer(`${role}-${roomCode}`, {
@@ -57,84 +96,64 @@
       });
       peer.on('error', err => log(`[ERROR] PeerJS: ${err}`));
 
-      if (role === 'compute') {
-        // 計算側：仮想カメラを選んで取得
-        callBtn.style.display = 'none';
-
-        // enumerateDevices→ラベル付きリスト取得
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        const cams = devices.filter(d => d.kind === 'videoinput');
-        const vc = cams.find(d =>
-          /OBS Virtual Camera|Unity Capture|VirtualCam/.test(d.label)
-        );
-        if (!vc) {
-          return log('[ERROR] 仮想カメラが見つかりません');
-        }
-        log(`[INFO] Found virtual camera: ${vc.label}`);
-
-        try {
-          // deviceId を exact で指定
-          localStream = await navigator.mediaDevices.getUserMedia({
-            video: { deviceId: { exact: vc.deviceId } },
-            audio: false
-          });
-          localV.srcObject = localStream;
-          // 明示的に再生開始
-          await localV.play();
-          log('[INFO] Virtual camera stream playing');
-        } catch (e) {
-          return log(`[ERROR] VC getUserMedia failed: ${e}`);
-        }
-
-        peer.on('call', call => {
-          log('[INFO] Incoming call, answering with VC stream');
-          call.answer(localStream);
-          call.on('stream', s => {
-            remoteV.srcObject = s;
-            remoteV.play();
-            log('[INFO] Received user stream');
-          });
-        });
-
-      } else {
-        // ユーザー側：自分のカメラを取得
-        callBtn.style.display = 'inline-block';
+      if (role === 'user') {
+        // 選択されたカメラでストリーム取得
+        const deviceId = camSel.value;
         try {
           localStream = await navigator.mediaDevices.getUserMedia({
-            video: true, audio: false
+            video:{ deviceId: deviceId }, audio:false
           });
           localV.srcObject = localStream;
-          await localV.play();
-          log('[INFO] User camera stream playing');
-        } catch (e) {
-          return log(`[ERROR] getUserMedia failed: ${e}`);
+          log(`[INFO] Selected camera stream ready: ${camSel.selectedOptions[0].text}`);
+        } catch(e) {
+          return log(`[ERROR] カメラ取得失敗: ${e}`);
         }
-
         peer.on('call', call => {
           log('[INFO] Incoming call, answering with user camera');
           call.answer(localStream);
           call.on('stream', s => {
             remoteV.srcObject = s;
-            remoteV.play();
             log('[INFO] Received remote (compute) stream');
+          });
+        });
+      } else {
+        // 計算側は仮想カメラをキャプチャして返す（既存ロジック）
+        callBtn.style.display = 'none';
+        const cams = await navigator.mediaDevices.enumerateDevices();
+        const vc = cams.find(d=>d.kind==='videoinput' &&
+                     /VirtualCam|OBS Virtual Camera|Unity Capture/.test(d.label));
+        if (!vc) return log('[ERROR] 仮想カメラが見つかりません');
+        localStream = await navigator.mediaDevices.getUserMedia({
+          video:{ deviceId: vc.deviceId }, audio:false
+        });
+        localV.srcObject = localStream;
+        log(`[INFO] Using virtual camera: ${vc.label}`);
+        peer.on('call', call => {
+          log('[INFO] Incoming call, answering with VC');
+          call.answer(localStream);
+          call.on('stream', s => {
+            remoteV.srcObject = s;
+            log('[INFO] Received user stream');
           });
         });
       }
     };
 
     callBtn.onclick = () => {
+      status.textContent = '[INFO] Connecting…';
       if (!peer || !roomCode) return log('[ERROR] 先に開始してください');
-      const target = role === 'user' ?
-                     `compute-${roomCode}` :
-                     `user-${roomCode}`;
+      const target = role==='user' ? `compute-${roomCode}` : `user-${roomCode}`;
       log(`[INFO] Calling ${target}`);
-      const call = peer.call(target, localStream);
-      call.on('stream', s => {
-        remoteV.srcObject = s;
-        remoteV.play();
-        log('[INFO] Received remote stream via call');
-      });
-      call.on('error', e => log(`[ERROR] call failed: ${e}`));
+      try {
+        const call = peer.call(target, localStream);
+        call.on('stream', s => {
+          remoteV.srcObject = s;
+          log('[INFO] Received remote stream');
+        });
+        call.on('error', e => log(`[ERROR] call error: ${e}`));
+      } catch(e) {
+        log(`[ERROR] peer.call failed: ${e}`);
+      }
     };
   </script>
 </body>
