@@ -1,172 +1,149 @@
-<!DOCTYPE html>
-<html lang="ja">
-<head>
-  <meta charset="UTF-8">
-  <title>骨格推定 P2P（自動VC選択 + ユーザー手動選択併用版）</title>
-  <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
-  <style>
-    body { font-family: sans-serif; text-align: center; }
-    video { width:45%; margin:0 2%; background:#000 }
-    #controls { margin:1em; }
-    #status { color:red; white-space:pre-wrap; text-align:left; }
-    #cameraSelectWrapper { margin-top:8px; }
-  </style>
-</head>
-<body>
-  <h1>骨格推定 P2P（自動VC選択 + ユーザー手動選択）</h1>
-  <div id="controls">
-    <label><input type="radio" name="role" value="compute"> 計算</label>
-    <label><input type="radio" name="role" value="user"> ユーザー</label><br>
-    部屋番号：<input type="text" id="roomCode" placeholder="1234"><br>
-    <div id="cameraSelectWrapper" style="display:none;">
-      カメラを選択：
-      <select id="cameraSelect"></select>
-    </div>
-    <button id="startBtn">開始</button>
-    <button id="callBtn">接続</button>
-  </div>
+# auto_compute_invert_js_capture.py
+"""
+自動「計算」クライアント（色反転版・JSキャプチャ）
+  • Selenium＋JS で <video id="remoteVideo"> のフレームを off‐screen Canvas 経由で取得
+  • 色反転 → pyvirtualcam で仮想カメラ出力
+  • ROI（動画解像度）変更時は仮想カメラを再オープン
+"""
 
-  <div id="status">[INFO] Ready</div>
-  <p>あなたの PeerID: <span id="myId">—</span></p>
-  <div>
-    <video id="localVideo" autoplay muted playsinline></video>
-    <video id="remoteVideo" autoplay playsinline></video>
-  </div>
+import time, random, base64
+import cv2
+import numpy as np
+import pyvirtualcam
 
-  <script>
-    const statusEl = document.getElementById('status');
-    const roleEls  = document.getElementsByName('role');
-    const camWrap  = document.getElementById('cameraSelectWrapper');
-    const camSel   = document.getElementById('cameraSelect');
-    const startBtn = document.getElementById('startBtn');
-    const callBtn  = document.getElementById('callBtn');
-    const roomIn   = document.getElementById('roomCode');
-    const myId     = document.getElementById('myId');
-    const localV   = document.getElementById('localVideo');
-    const remoteV  = document.getElementById('remoteVideo');
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import NoAlertPresentException
+from webdriver_manager.chrome import ChromeDriverManager
 
-    let role, peer, localStream, roomCode;
+# ==== 設定部分をあなたの環境に合わせて書き換えてください ====
+SITE_URL  = "https://YOUR_GITHUB_USERNAME.github.io/pose-p2p/"
+CAP_FPS   = 20
+ROOM_CODE = f"{random.randint(0,9999):04d}"
+# ================================================================
 
-    function log(msg) {
-      console.log(msg);
-      statusEl.textContent += '\n' + msg;
-    }
+def dismiss_alert(driver):
+    try:
+        a = driver.switch_to.alert
+        a.accept()
+    except NoAlertPresentException:
+        pass
 
-    // ユーザー選択時にカメラプルダウンを表示
-    roleEls.forEach(radio => radio.addEventListener('change', () => {
-      if (radio.checked && radio.value === 'user') {
-        camWrap.style.display = 'inline-block';
-        populateCameras();
-      } else if (radio.checked) {
-        camWrap.style.display = 'none';
-      }
-    }));
+def open_virtualcam(w, h, fps):
+    """OBS/UnityCapture を試して仮想カメラをオープン"""
+    for backend in ('obs','unitycapture'):
+        try:
+            cam = pyvirtualcam.Camera(width=w, height=h, fps=fps,
+                                     backend=backend, print_fps=False)
+            print(f"[INFO] VirtualCam opened via {backend!r}: {cam.device}")
+            return cam
+        except Exception as e:
+            print(f"[WARN] backend={backend} failed: {e}")
+    raise RuntimeError("No virtual camera backend worked")
 
-    async function populateCameras() {
-      // 権限リクエスト
-      try {
-        const tmp = await navigator.mediaDevices.getUserMedia({ video: true });
-        tmp.getTracks().forEach(t=>t.stop());
-      } catch(e) {
-        log('[WARN] カメラ許可が必要です');
-      }
-      const devices = await navigator.mediaDevices.enumerateDevices();
-      camSel.innerHTML = '';
-      devices.filter(d=>d.kind==='videoinput').forEach(d => {
-        const o = document.createElement('option');
-        o.value = d.deviceId;
-        o.text  = d.label || d.deviceId;
-        camSel.appendChild(o);
-      });
-      log('[INFO] カメラ一覧を更新');
-    }
+def main():
+    # 1) Selenium + Chrome 起動
+    service = Service(ChromeDriverManager().install())
+    opts = webdriver.ChromeOptions()
+    opts.add_argument("--use-fake-ui-for-media-stream")
+    opts.add_argument("--disable-infobars")
+    opts.add_argument("--start-maximized")
+    driver = webdriver.Chrome(service=service, options=opts)
 
-    startBtn.onclick = async () => {
-      statusEl.textContent = '[INFO] Starting…';
-      role     = document.querySelector('input[name=role]:checked')?.value;
-      roomCode = roomIn.value.trim();
-      if (!role)     return log('[ERROR] 先に役割を選択してください');
-      if (!roomCode) return log('[ERROR] 部屋番号を入力してください');
+    try:
+        # 2) P2Pページにアクセスして「計算」役で入室
+        driver.get(SITE_URL)
+        dismiss_alert(driver)
+        wait = WebDriverWait(driver, 20)
 
-      // PeerJS 初期化
-      peer = new Peer(`${role}-${roomCode}`, {
-        host: '0.peerjs.com', secure: true, port: 443,
-        config: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] }
-      });
-      peer.on('open', id => {
-        myId.textContent = id;
-        log(`[INFO] Peer opened: ${id}`);
-      });
-      peer.on('error', err => log(`[ERROR] PeerJS: ${err}`));
+        wait.until(EC.element_to_be_clickable(
+            (By.CSS_SELECTOR, 'input[value="compute"]')
+        )).click()
+        inp = driver.find_element(By.ID, "roomCode")
+        inp.clear(); inp.send_keys(ROOM_CODE)
+        driver.find_element(By.ID, "startBtn").click()
+        dismiss_alert(driver)
+        print(f"[INFO] ROOM CODE = {ROOM_CODE}")
+        print("[INFO] Waiting for user…")
 
-      if (role === 'user') {
-        // ユーザー：選択カメラを使う
-        const deviceId = camSel.value;
-        try {
-          localStream = await navigator.mediaDevices.getUserMedia({
-            video: { deviceId }, audio: false
-          });
-          localV.srcObject = localStream;
-          log(`[INFO] Selected camera: ${camSel.selectedOptions[0].text}`);
-        } catch(e) {
-          return log(`[ERROR] カメラ取得失敗: ${e}`);
-        }
-        setupCallHandler(localStream, 'ユーザー');
-      } else {
-        // 計算：自動で仮想カメラを選択
-        callBtn.style.display = 'none';
-        // デバイス一覧取得
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        // ラベルにVirtualCamを含むデバイスを優先
-        const vc = devices.find(d =>
-          d.kind==='videoinput' &&
-          /VirtualCam|OBS Virtual Camera|Unity Capture/.test(d.label)
-        );
-        if (!vc) {
-          return log('[ERROR] 仮想カメラが見つかりません');
-        }
-        log(`[INFO] Auto-selected VC: ${vc.label}`);
-        try {
-          localStream = await navigator.mediaDevices.getUserMedia({
-            video: { deviceId: vc.deviceId }, audio: false
-          });
-          localV.srcObject = localStream;
-        } catch(e) {
-          return log(`[ERROR] 仮想カメラ取得失敗: ${e}`);
-        }
-        setupCallHandler(localStream, '計算');
-      }
-    };
+        # 3) <video id="remoteVideo"> 要素を待つ
+        wait.until(EC.presence_of_element_located((By.ID, "remoteVideo")))
+        dismiss_alert(driver)
+        print("[INFO] remoteVideo element ready")
 
-    function setupCallHandler(stream, roleName) {
-      peer.on('call', call => {
-        log(`[INFO] Incoming call on ${roleName} side, answering…`);
-        call.answer(stream);
-        call.on('stream', s => {
-          remoteV.srcObject = s;
-          log('[INFO] Received remote stream');
-        });
-      });
-    }
+        # 4) JSで動画解像度を取得
+        def get_video_size():
+            w = driver.execute_script(
+                "let v=document.getElementById('remoteVideo');"
+                "return v.videoWidth||v.clientWidth;"
+            )
+            h = driver.execute_script(
+                "let v=document.getElementById('remoteVideo');"
+                "return v.videoHeight||v.clientHeight;"
+            )
+            return int(w), int(h)
 
-    callBtn.onclick = () => {
-      statusEl.textContent = '[INFO] Connecting…';
-      if (!peer || !roomCode) return log('[ERROR] 先に開始してください');
-      const target = role==='user'
-        ? `compute-${roomCode}`
-        : `user-${roomCode}`;
-      log(`[INFO] Calling ${target}`);
-      try {
-        const call = peer.call(target, localStream);
-        call.on('stream', s => {
-          remoteV.srcObject = s;
-          log('[INFO] Received remote stream');
-        });
-        call.on('error', e => log(`[ERROR] call error: ${e}`));
-      } catch(e) {
-        log(`[ERROR] peer.call failed: ${e}`);
-      }
-    };
-  </script>
-</body>
-</html>
+        width, height = get_video_size()
+        print(f"[INFO] initial video size = {width}×{height}")
+
+        # 5) 仮想カメラを開く
+        cam = open_virtualcam(width, height, CAP_FPS)
+        frame_count = 0
+
+        # 6) メインループ：JSキャプチャ→反転→送信
+        while True:
+            # a) サイズ変化チェック
+            new_w, new_h = get_video_size()
+            if new_w!=width or new_h!=height:
+                print(f"[INFO] video size changed: {width}×{height} → {new_w}×{new_h}")
+                cam.close()
+                cam = open_virtualcam(new_w, new_h, CAP_FPS)
+                width, height = new_w, new_h
+                continue
+
+            # b) JSで off‐screen Canvas に現在フレームを描画 → DataURL を取得
+            data_url = driver.execute_script(
+                "const v=document.getElementById('remoteVideo');"
+                "const c=document.createElement('canvas');"
+                "c.width=v.videoWidth||v.clientWidth;"
+                "c.height=v.videoHeight||v.clientHeight;"
+                "c.getContext('2d').drawImage(v,0,0,c.width,c.height);"
+                "return c.toDataURL('image/png');"
+            )
+            # c) DataURL → OpenCV 画像
+            header, b64 = data_url.split(',',1)
+            img = cv2.imdecode(
+                np.frombuffer(base64.b64decode(b64), dtype=np.uint8),
+                cv2.IMREAD_COLOR
+            )
+            # d) 色反転
+            inverted = cv2.bitwise_not(img)
+
+            # e) 仮想カメラ送信
+            try:
+                cam.send(inverted)
+                cam.sleep_until_next_frame()
+            except Exception as e:
+                print(f"[ERROR] cam.send failed: {e}")
+                cam.close()
+                cam = open_virtualcam(width, height, CAP_FPS)
+                continue
+
+            # f) デバッグログ
+            frame_count += 1
+            if frame_count % CAP_FPS == 0:
+                print(f"[DEBUG] Sent {frame_count} frames")
+
+    except KeyboardInterrupt:
+        print("\n[INFO] Interrupted by user, exiting…")
+    finally:
+        try: cam.close()
+        except: pass
+        driver.quit()
+        print("[INFO] Chrome closed, script ended.")
+
+if __name__ == "__main__":
+    main()
