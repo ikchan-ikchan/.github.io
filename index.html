@@ -1,232 +1,205 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-  <meta charset="UTF-8" />
-  <title>PeerJS P2P通信デモ</title>
-  <!-- PeerJSのCDNスクリプトを読み込み -->
+  <meta charset="UTF-8">
+  <title>骨格推定 P2P 通信デモ</title>
   <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
   <style>
-    body { font-family: sans-serif; }
-    video { width: 320px; height: 240px; background: #000; }
-    #localVideoContainer, #remoteVideoContainer { display: inline-block; margin: 0 20px; }
-    #log { white-space: pre-wrap; background: #f0f0f0; padding: 5px; margin-top: 10px; }
+    body { font-family: sans-serif; text-align: center; }
+    video { width: 320px; height: 240px; background: #000; margin: 0 10px; }
+    #controls { margin: 1em; }
+    #log { white-space: pre-wrap; background: #f8f8f8; padding: 8px; text-align: left; max-height: 200px; overflow-y: auto; }
   </style>
 </head>
 <body>
-  <h1>WebRTC P2Pページ (PeerJS)</h1>
+  <h1>骨格推定 P2P デモ</h1>
+
   <div>
-    <!-- ローカル映像エリア -->
-    <div id="localVideoContainer">
+    <div>
       <h3>ローカル映像</h3>
       <video id="localVideo" autoplay playsinline muted></video>
     </div>
-    <!-- リモート映像エリア -->
-    <div id="remoteVideoContainer">
+    <div>
       <h3>リモート映像</h3>
       <video id="remoteVideo" autoplay playsinline></video>
     </div>
   </div>
 
-  <!-- コントロールエリア -->
   <div id="controls">
-    <!-- 自分のPeerID表示 -->
-    <p>自分のID: <span id="myId">（未接続）</span></p>
+    <p>自分のID: <strong id="myId">—</strong></p>
 
-    <!-- ユーザー側の操作UI（デフォルト表示） -->
-    <div id="userControls">
-      <label for="videoSource">カメラ選択:</label>
-      <select id="videoSource"></select>
-      <button id="startCamera">カメラ開始</button><br/>
-      <input type="text" id="targetId" placeholder="相手のIDを入力" />
+    <!-- 共通部：部屋番号 -->
+    <label>部屋番号：
+      <input type="text" id="roomCode" placeholder="1234">
+    </label><br><br>
+
+    <!-- ユーザー用カメラ選択UI -->
+    <div id="userControls" style="display:none;">
+      <label>カメラ選択：
+        <select id="videoSource"></select>
+      </label>
+      <button id="startCamera">カメラ開始</button><br><br>
       <button id="callBtn">発信</button>
+      <input type="text" id="targetId" placeholder="相手のIDを入力">
     </div>
 
-    <!-- 計算側の操作UI（自動モード用） -->
+    <!-- 計算ノード用表示 -->
     <div id="computeControls" style="display:none;">
-      <p>計算ノードモードで待機中...</p>
+      <p>計算ノードモード：Unity Video Capture を自動選択中…</p>
     </div>
-
-    <!-- ログ表示エリア -->
-    <div id="log"></div>
   </div>
 
+  <div id="log"></div>
+
 <script>
-  // URLのクエリパラメータで役割を判定（?role=computeで計算モード）
-  const urlParams = new URLSearchParams(window.location.search);
-  const role = urlParams.get('role');
-
-  // 要素取得
-  const localVideo  = document.getElementById('localVideo');
-  const remoteVideo = document.getElementById('remoteVideo');
-  const myIdDisplay = document.getElementById('myId');
-  const videoSelect = document.getElementById('videoSource');
-  const startCamBtn = document.getElementById('startCamera');
-  const callBtn     = document.getElementById('callBtn');
-  const targetIdInput = document.getElementById('targetId');
-  const logDiv      = document.getElementById('log');
-
-  // ログを画面とコンソールに出力する補助関数
-  function log(message) {
-    console.log(message);
-    logDiv.textContent += message + "\n";
+  // ログ出力補助
+  function log(msg) {
+    console.log(msg);
+    document.getElementById('log').textContent += msg + '\n';
   }
 
-  // PeerJSのPeerサーバへ接続（デフォルトのシグナリングサーバを使用）
-  const peer = new Peer();
+  // 4桁ランダムID生成
+  function generate4Digits() {
+    return ('0000' + Math.floor(Math.random() * 10000)).slice(-4);
+  }
+  const peerId = generate4Digits();
+  log(`[INFO] 生成された PeerID: ${peerId}`);
+
+  // PeerJS インスタンスを指定IDで生成
+  const peer = new Peer(peerId, {
+    host: '0.peerjs.com', secure: true, port: 443,
+    config: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] }
+  });
   peer.on('open', id => {
-    myIdDisplay.textContent = id;
-    log(`Peerサーバに接続しました。自分のID: ${id}`);
+    document.getElementById('myId').textContent = id;
+    log(`[INFO] PeerJS に接続しました。ID = ${id}`);
   });
-  peer.on('error', err => {
-    log(`Peerエラー: ${err}`);
-  });
+  peer.on('error', err => log(`[ERROR] PeerJS: ${err}`));
+
+  // 役割判定: URLに ?role=compute があれば計算、なければユーザー
+  const urlParams = new URLSearchParams(window.location.search);
+  const role = urlParams.get('role') === 'compute' ? 'compute' : 'user';
+
+  const localVideo   = document.getElementById('localVideo');
+  const remoteVideo  = document.getElementById('remoteVideo');
+  const roomCodeInput= document.getElementById('roomCode');
+  const userCtrls    = document.getElementById('userControls');
+  const compCtrls    = document.getElementById('computeControls');
+  const videoSelect  = document.getElementById('videoSource');
+  const startCamBtn  = document.getElementById('startCamera');
+  const callBtn      = document.getElementById('callBtn');
+  const targetIdIn   = document.getElementById('targetId');
 
   if (role === 'compute') {
-    // 計算ノードモード：ユーザー操作UIを非表示にし、自動カメラ取得を行う
-    document.getElementById('userControls').style.display = 'none';
-    document.getElementById('computeControls').style.display = 'block';
-    log("計算ノードモード: \"Unity Video Capture\" カメラを自動選択します。");
+    // 計算ノードモード
+    userCtrls.style.display = 'none';
+    compCtrls.style.display = 'block';
 
-    // デバイス一覧から "Unity Video Capture" のカメラを探す
+    // 部屋番号はユーザーに伝えて使うだけ
+    const room = roomCodeInput.value.trim();
+
+    // 自動でUnity Video Captureを探す
     navigator.mediaDevices.enumerateDevices()
       .then(devices => {
-        const camDevice = devices.find(d => 
+        const camDev = devices.find(d =>
           d.kind === 'videoinput' && d.label.includes('Unity Video Capture')
         );
-        if (!camDevice) {
-          // デバイスが見つからなかった場合
-          const msg = "エラー: 指定の仮想カメラ (Unity Video Capture) が見つかりません。";
-          log(msg);
-          throw new Error(msg);  // 下のcatchに捕捉される
+        if (!camDev) {
+          log('【エラー】Unity Video Capture が見つかりません');
+          throw new Error('仮想カメラ未検出');
         }
-        log(`"${camDevice.label}" を選択します...`);
-        // 該当カメラデバイスで映像取得 (deviceIdを exact 指定で要求)
+        log(`Unity Video Capture (${camDev.label}) を使用します`);
         return navigator.mediaDevices.getUserMedia({
-          video: { deviceId: { exact: camDevice.deviceId } }, 
-          audio: false 
+          video: { deviceId: { exact: camDev.deviceId } },
+          audio: false
         });
       })
       .then(stream => {
-        // カメラ映像の取得に成功した場合
         localVideo.srcObject = stream;
-        const trackLabel = stream.getVideoTracks()[0].label;
-        log(`使用中のカメラ: ${trackLabel}`);
-        // 受信した計算ノード映像をそのままP2P通話で送信する準備
+        // 着信時応答
         peer.on('call', call => {
-          log("着信がありました。計算ノード映像で応答します...");
-          call.answer(stream);  // 計算ノード（処理後）映像で応答
-          call.on('stream', remoteStream => {
-            // 相手（ユーザー）の映像を受信した場合（ユーザー側が映像送信してきた場合）
-            remoteVideo.srcObject = remoteStream;
-            log("リモート映像を受信しました。");
+          log('着信を検知。計算結果映像で応答...');
+          call.answer(stream);
+          call.on('stream', userStream => {
+            remoteVideo.srcObject = userStream;
+            log('ユーザー映像を受信しました');
           });
         });
       })
       .catch(err => {
-        // カメラ取得エラー時の処理（日本語メッセージを表示）
-        console.error(err);
-        let errMsg = "";
-        if (err.name === "NotFoundError" || err.name === "OverconstrainedError") {
-          errMsg = "指定されたカメラが見つかりません: " + err.message;
-        } else if (err.name === "NotAllowedError" || err.name === "SecurityError") {
-          errMsg = "カメラの利用が許可されていません: " + err.message;
-        } else if (err.name === "NotReadableError" || err.name === "TrackStartError") {
-          errMsg = "カメラにアクセスできません (他のアプリで使用中の可能性): " + err.message;
-        } else {
-          errMsg = "カメラの取得でエラーが発生しました: " + err.message;
-        }
-        log(errMsg);
-        // 計算ノードモードではこの後も通話受信待機は続行（カメラなし）
+        // 日本語でエラー表示
+        let msg;
+        if (err.name === 'NotFoundError') msg = 'カメラが見つかりません';
+        else if (err.name === 'NotAllowedError') msg = 'カメラ利用が許可されていません';
+        else msg = `カメラ取得エラー: ${err.message}`;
+        log(`【エラー】${msg}`);
+        // 着信は受けるが映像は送れない
         peer.on('call', call => {
-          log("着信がありましたがカメラ映像がないため応答できません。");
+          log('着信あり (映像なしで応答)');
           call.answer(null);
         });
       });
 
   } else {
-    // ユーザーモード：手動でカメラ選択・通話発信
-    document.getElementById('userControls').style.display = 'block';
-    document.getElementById('computeControls').style.display = 'none';
-    log("ユーザーモード: カメラを選択して開始してください。");
+    // ユーザーモード
+    userCtrls.style.display = 'block';
+    compCtrls.style.display = 'none';
+    log('ユーザーモード: カメラを選択してください');
 
-    // カメラデバイスのリストを取得してドロップダウンに追加
-    navigator.mediaDevices.enumerateDevices().then(deviceInfos => {
-      videoSelect.innerHTML = "";
-      for (const deviceInfo of deviceInfos) {
-        if (deviceInfo.kind === 'videoinput') {
-          const option = document.createElement('option');
-          option.value = deviceInfo.deviceId;
-          option.text = deviceInfo.label || `カメラ (${deviceInfo.deviceId})`;
-          videoSelect.appendChild(option);
-        }
-      }
-    });
+    // カメラ一覧取得
+    navigator.mediaDevices.enumerateDevices()
+      .then(devs => {
+        devs.filter(d => d.kind === 'videoinput')
+          .forEach(d => {
+            const o = document.createElement('option');
+            o.value = d.deviceId;
+            o.text  = d.label || 'カメラ';
+            videoSelect.appendChild(o);
+          });
+      });
 
-    // 「カメラ開始」ボタンクリック: 選択されたカメラで映像取得開始
-    startCamBtn.addEventListener('click', () => {
-      const deviceId = videoSelect.value;
-      if (!deviceId) {
-        log("カメラが選択されていません。");
+    // カメラ開始
+    startCamBtn.onclick = () => {
+      const devId = videoSelect.value;
+      if (!devId) {
+        log('【エラー】カメラが選択されていません');
         return;
       }
       navigator.mediaDevices.getUserMedia({
-        video: { deviceId: { exact: deviceId } }, 
-        audio: false 
+        video: { deviceId: { exact: devId } },
+        audio: false
       })
       .then(stream => {
         localVideo.srcObject = stream;
-        const trackLabel = stream.getVideoTracks()[0].label;
-        log(`使用中のカメラ: ${trackLabel}`);
-        // ユーザー側では取得したローカル映像を保存し、後で通話に使用
-        window.localStream = stream;
+        log(`選択したカメラ (${videoSelect.selectedOptions[0].text}) を開始`);
+        // 発信ボタンで使用
+        callBtn.onclick = () => {
+          const target = targetIdIn.value.trim();
+          if (!target) {
+            log('【エラー】発信先IDを入力してください');
+            return;
+          }
+          log(`ID:${target} へ発信中...`);
+          const call = peer.call(target, stream);
+          call.on('stream', remoto => {
+            remoteVideo.srcObject = remoto;
+            log('計算ノード映像を受信しました');
+          });
+          call.on('error', e => log(`【エラー】通話中に問題: ${e}`));
+        };
       })
       .catch(err => {
-        console.error(err);
-        let errMsg = "";
-        if (err.name === "NotFoundError" || err.name === "OverconstrainedError") {
-          errMsg = "指定されたカメラが見つかりません: " + err.message;
-        } else if (err.name === "NotAllowedError" || err.name === "SecurityError") {
-          errMsg = "カメラの利用が許可されていません: " + err.message;
-        } else if (err.name === "NotReadableError" || err.name === "TrackStartError") {
-          errMsg = "カメラにアクセスできません (他のアプリで使用中の可能性): " + err.message;
-        } else {
-          errMsg = "カメラの取得でエラーが発生しました: " + err.message;
-        }
-        log(errMsg);
+        log(`【エラー】カメラ取得失敗: ${err.message}`);
       });
-    });
+    };
 
-    // 「発信」ボタンクリック: 入力されたIDの相手に対して通話を開始
-    callBtn.addEventListener('click', () => {
-      const targetId = targetIdInput.value.trim();
-      if (!targetId) {
-        log("発信先のIDを入力してください。");
-        return;
-      }
-      if (!window.localStream) {
-        log("発信前にカメラを開始してください。");
-        return;
-      }
-      log(`ID:${targetId} へ発信します...`);
-      const call = peer.call(targetId, window.localStream);
-      call.on('stream', remoteStream => {
-        remoteVideo.srcObject = remoteStream;
-        log("リモート映像を受信しました。");
-      });
-      call.on('error', err => {
-        console.error(err);
-        log("通話エラー: " + err);
-      });
-    });
-
-    // 着信時の処理（計算ノード側から発信してきた場合に受ける）
+    // 着信処理
     peer.on('call', call => {
-      log("着信がありました。応答します...");
-      // 自分のカメラ映像を持っている場合は返送しつつ応答（双方向通話）。
-      call.answer(window.localStream || null);
-      call.on('stream', remoteStream => {
-        remoteVideo.srcObject = remoteStream;
-        log("リモート映像を受信しました。");
+      log('着信を検知。応答...');
+      call.answer(localVideo.srcObject || null);
+      call.on('stream', remoto => {
+        remoteVideo.srcObject = remoto;
+        log('リモート映像を受信しました');
       });
     });
   }
