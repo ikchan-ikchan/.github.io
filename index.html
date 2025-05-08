@@ -2,12 +2,13 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8" />
-  <title>WebRTC P2P デモ（カメラ自動／手動選択）</title>
+  <title>WebRTC P2P デモ（スナップショット機能付き）</title>
   <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
   <style>
     body { font-family: sans-serif; text-align: center; }
     video { width: 320px; height: 240px; background:#000; }
     #log { white-space: pre-wrap; background:#f7f7f7; padding:4px; margin-top:8px; text-align:left; }
+    #computeControls p, #computeControls button { margin: 4px; }
   </style>
 </head>
 <body>
@@ -41,6 +42,14 @@
     <!-- 計算モード UI -->
     <div id="computeControls" style="display:none;">
       <p>計算ノードモード：Unity Video Capture を自動選択して待機します。</p>
+
+      <!-- モード選択 -->
+      <p>
+        <label><input type="radio" name="processMode" value="continuous" checked> 連続処理モード</label>
+        <label><input type="radio" name="processMode" value="snapshot"> スナップショットモード</label>
+      </p>
+      <!-- スナップショットボタン -->
+      <button id="snapshotBtn">撮影</button>
     </div>
   </div>
 
@@ -48,125 +57,103 @@
   <div id="log">[INFO] ページ読み込み完了</div>
 
 <script>
-  // ======= 役割判定 =======
   const params = new URLSearchParams(location.search);
-  const role   = params.get('role');          // "compute" なら計算ノード
+  const role   = params.get('role');
   const isCompute = role === 'compute';
 
-  // ======= HTML要素 =======
   const localVideo  = document.getElementById('localVideo');
   const remoteVideo = document.getElementById('remoteVideo');
   const myIdSpan    = document.getElementById('myId');
   const logDiv      = document.getElementById('log');
 
-  // ユーザーモード要素
-  const userControls = document.getElementById('userControls');
-  const videoSel     = document.getElementById('videoSource');
-  const startBtn     = document.getElementById('startCamera');
-  const targetInput  = document.getElementById('targetId');
-  const callBtn      = document.getElementById('callBtn');
-
-  // 計算モード要素
+  const userControls    = document.getElementById('userControls');
   const computeControls = document.getElementById('computeControls');
+  const videoSel        = document.getElementById('videoSource');
+  const startBtn        = document.getElementById('startCamera');
+  const targetInput     = document.getElementById('targetId');
+  const callBtn         = document.getElementById('callBtn');
+  const snapshotBtn     = document.getElementById('snapshotBtn');
 
-  // ログ出力
-  function log(msg){ console.log(msg); logDiv.textContent += '\n' + msg; }
+  function log(msg){ console.log(msg); logDiv.textContent += '\n'+msg; }
 
-  // Peer 初期化
   const peer = new Peer();
-  peer.on('open', id => {
-    myIdSpan.textContent = id;
-    log(`[INFO] Peer 接続完了。自分のID: ${id}`);
-  });
-  peer.on('error', err => log(`[ERROR] Peer エラー: ${err}`));
+  peer.on('open', id => { myIdSpan.textContent = id; log(`[INFO] 自分のID: ${id}`); });
+  peer.on('error', err => log(`[ERROR] PeerJS: ${err}`));
 
-  // ==========================================================
-  // 計算ノードモード (role=compute)
-  // ==========================================================
-  if (isCompute){
+  // スナップショットリクエスト用フラグ
+  window.snapshotRequested = false;
+  snapshotBtn.onclick = () => {
+    window.snapshotRequested = true;
+    log("[INFO] 撮影リクエストを受け付けました");
+  };
+
+  if (isCompute) {
     userControls.style.display    = 'none';
     computeControls.style.display = 'block';
+    log("[INFO] 計算モード: Unity Video Capture を自動選択します");
 
-    // Unity Video Capture を検索
     navigator.mediaDevices.enumerateDevices()
       .then(devs => {
-        const cam = devs.find(d => d.kind === 'videoinput' &&
-                                   d.label.includes('Unity Video Capture'));
-        if (!cam){
-          log("[ERROR] Unity Video Capture が見つかりません。");
-          throw new Error("仮想カメラなし");
-        }
+        const cam = devs.find(d => d.kind==='videoinput' && d.label.includes('Unity Video Capture'));
+        if (!cam) throw new Error("Unity Video Capture が見つかりません");
         log(`[INFO] 「${cam.label}」を使用します`);
         return navigator.mediaDevices.getUserMedia({
-          video:{ deviceId:{ exact: cam.deviceId } },
-          audio:false
+          video:{ deviceId:{ exact: cam.deviceId }}, audio:false
         });
       })
       .then(stream => {
         localVideo.srcObject = stream;
-        log("[INFO] 仮想カメラ映像を取得しました");
-
-        // 着信で stream を返送
         peer.on('call', call => {
-          log("[INFO] 着信 → 仮想カメラ映像で応答");
+          log("[INFO] 着信: 計算ノード映像で応答します");
           call.answer(stream);
           call.on('stream', s => {
             remoteVideo.srcObject = s;
-            log("[INFO] ユーザー映像を受信");
+            log("[INFO] ユーザー映像を受信しました");
           });
         });
       })
       .catch(err => {
         log(`[ERROR] カメラ取得失敗: ${err.message}`);
-        // カメラなしでも待ち受けは設定
-        peer.on('call', call=>{
-          log("[WARN] 映像なしで応答します (カメラ取得失敗)");
+        peer.on('call', call => {
+          log("[WARN] 映像なしで応答します");
           call.answer(null);
         });
       });
 
-  // ==========================================================
-  // ユーザーモード
-  // ==========================================================
   } else {
     userControls.style.display    = 'block';
     computeControls.style.display = 'none';
-    log("[INFO] ユーザーモード：カメラを選択してください");
+    log("[INFO] ユーザーモード: カメラを選択してください");
 
-    // カメラ一覧を取得しドロップダウンへ
-    navigator.mediaDevices.enumerateDevices()
-      .then(devs=>{
-        videoSel.innerHTML = '';
-        devs.filter(d=>d.kind==='videoinput').forEach(d=>{
-          const opt = document.createElement('option');
-          opt.value = d.deviceId;
-          opt.text  = d.label || d.deviceId;
-          videoSel.appendChild(opt);
-        });
-        if(videoSel.options.length===0) log("[WARN] カメラデバイスが見つかりません");
+    navigator.mediaDevices.enumerateDevices().then(devs => {
+      videoSel.innerHTML = '';
+      devs.filter(d=>d.kind==='videoinput').forEach(d=>{
+        const o = document.createElement('option');
+        o.value = d.deviceId; o.text = d.label || d.deviceId;
+        videoSel.appendChild(o);
       });
+      if (!videoSel.options.length) log("[WARN] カメラが見つかりません");
+    });
 
-    // カメラ開始
-    startBtn.onclick = ()=>{
+    startBtn.onclick = () => {
       const id = videoSel.value;
-      if(!id){ log("[ERROR] カメラが選択されていません"); return; }
+      if (!id) return log("[ERROR] カメラ選択してください");
       navigator.mediaDevices.getUserMedia({
-        video:{ deviceId:{ exact:id } }, audio:false
-      }).then(stream=>{
+        video:{ deviceId:{ exact:id }}, audio:false
+      })
+      .then(stream => {
         localVideo.srcObject = stream;
         window.localStream = stream;
-        log(`[INFO] カメラ開始 (${stream.getVideoTracks()[0].label})`);
-      }).catch(err=>log(`[ERROR] カメラ開始失敗: ${err.message}`));
+        log(`[INFO] カメラ開始: ${stream.getVideoTracks()[0].label}`);
+      })
+      .catch(e => log(`[ERROR] カメラ開始失敗: ${e.message}`));
     };
 
-    // 発信
-    callBtn.onclick = ()=>{
+    callBtn.onclick = () => {
       const target = targetInput.value.trim();
-      if(!target){ log("[ERROR] 相手IDを入力してください"); return; }
-      if(!window.localStream){
-        log("[ERROR] 先にカメラを開始してください"); return;
-      }
-      log(`[INFO] 発信 → ${target}`);
+      if (!target)       return log("[ERROR] 相手IDを入力してください");
+      if (!window.localStream) return log("[ERROR] カメラ開始してください");
+      log(`[INFO] 発信: ${target}`);
       const call = peer.call(target, window.localStream);
       call.on('stream', s => {
         remoteVideo.srcObject = s;
@@ -175,11 +162,10 @@
       call.on('error', e => log(`[ERROR] 通話エラー: ${e}`));
     };
 
-    // 着信を受けた場合
-    peer.on('call', call=>{
-      log("[INFO] 着信を受けました → 応答");
+    peer.on('call', call => {
+      log("[INFO] 着信あり → 応答します");
       call.answer(window.localStream || null);
-      call.on('stream', s=>{
+      call.on('stream', s => {
         remoteVideo.srcObject = s;
         log("[INFO] リモート映像を受信しました");
       });
