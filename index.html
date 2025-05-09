@@ -2,124 +2,116 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8" />
-  <title>WebRTC P2P 映像通話 (ライブ/スナップショット)</title>
+  <title>PeerJSビデオ通話（ストリーミング/スナップショット切替）</title>
   <style>
-    body { font-family: sans-serif; }
-    #controls { margin-bottom: 1em; }
-    #modeSelect label { margin-right: 1em; }
-    #status { color: blue; font-weight: bold; margin-left: 1em; }
-    video { width: 320px; height: 240px; background: #000; }
+    video { border: 1px solid #333; margin: 4px; }
+    #controls { margin-top: 8px; }
   </style>
 </head>
 <body>
-  <h1>映像通話 デモ (ライブ・スナップショット対応)</h1>
+  <!-- 自身のカメラ映像と、リモートからの処理映像を表示する video 要素 -->
+  <video id="localVideo" autoplay playsinline muted width="320" height="240"></video>
+  <video id="remoteVideo" autoplay playsinline width="320" height="240"></video>
   <div id="controls">
-    <!-- Mode selection radio buttons -->
-    <div id="modeSelect">
-      <label><input type="radio" name="mode" value="live" checked> ライブモード</label>
-      <label><input type="radio" name="mode" value="snapshot"> スナップショットモード</label>
-    </div>
-    <!-- Snapshot capture button (enabled only in snapshot mode) -->
-    <button id="captureBtn" disabled>撮影</button>
-    <!-- Status text -->
-    <span id="status"></span>
+    <!-- 接続先ID入力と接続ボタン -->
+    相手ID: <input type="text" id="remoteIdInput" placeholder="接続先IDを入力" />
+    <button id="connectBtn">接続</button>
+    <br/>
+    <!-- モード切替ラジオボタン -->
+    モード:
+    <label><input type="radio" name="mode" value="stream" checked> 通常モード</label>
+    <label><input type="radio" name="mode" value="snap"> スナップショットモード</label>
+    <!-- 撮影ボタン（スナップショット要求） -->
+    <button id="snapBtn" disabled>撮影</button>
   </div>
 
-  <!-- Video elements for local and remote streams -->
-  <video id="localVideo" autoplay playsinline muted></video>
-  <video id="remoteVideo" autoplay playsinline></video>
-
-  <!-- Include PeerJS library -->
-  <script src="https://cdn.jsdelivr.net/npm/peerjs@1.4.0/dist/peerjs.min.js"></script>
+  <!-- PeerJSのクライアントライブラリを読み込み -->
+  <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
   <script>
     const localVideo = document.getElementById('localVideo');
     const remoteVideo = document.getElementById('remoteVideo');
-    const captureBtn = document.getElementById('captureBtn');
-    const statusText = document.getElementById('status');
-    const modeRadio = document.getElementsByName('mode');
+    const remoteIdInput = document.getElementById('remoteIdInput');
+    const connectBtn = document.getElementById('connectBtn');
+    const snapBtn = document.getElementById('snapBtn');
+    const modeRadios = document.querySelectorAll('input[name="mode"]');
 
-    // PeerJS setup: connect to PeerServer
-    const peer = new Peer(null, {
-      host: 'YOUR_PEERJS_SERVER_HOST',  // replace with actual PeerServer info
-      port: 9000,
-      path: '/peerjs'
+    // PeerJSでPeerを作成（シグナリングサーバーに接続）
+    const peer = new Peer();  // IDは自動割当て（デフォルトのPeerServerを使用）
+    peer.on('open', id => {
+      console.log("自分のID: " + id);
     });
-    const PROCESSING_PEER_ID = "processor-node-1";  // The fixed ID of the Python processing peer
 
-    let dataConn = null;
-    let call = null;
-    let currentMode = "live";
-
-    // Get user camera stream
+    // カメラ映像を取得
     navigator.mediaDevices.getUserMedia({ video: true, audio: false })
       .then(stream => {
-        // Show local preview
+        // 自分の映像をページ上に表示（ローカルプレビュー）
         localVideo.srcObject = stream;
 
-        // When peer connection is open, initiate the call and data connection
-        peer.on('open', id => {
-          console.log("My peer ID:", id);
-          // Connect data channel to processing peer
-          dataConn = peer.connect(PROCESSING_PEER_ID);
+        // 「接続」ボタン押下時の処理: 相手Peerに接続して通話を開始
+        connectBtn.onclick = () => {
+          const remoteId = remoteIdInput.value.trim();
+          if (!remoteId) {
+            alert("接続先IDを入力してください");
+            return;
+          }
+          console.log("接続要求: 相手ID=" + remoteId);
+          // データチャネル接続を開始
+          const dataConn = peer.connect(remoteId);
           dataConn.on('open', () => {
-            console.log('Data connection open');
-            // Send initial mode (live by default)
-            dataConn.send({ type: 'mode', value: currentMode });
+            console.log("DataConnectionがオープンしました");
+            // 受信メッセージがあればログ表示（必要に応じて）
+            dataConn.on('data', data => {
+              console.log("受信メッセージ:", data);
+            });
+            // メディア通話を開始（自分の映像を送信）
+            const call = peer.call(remoteId, stream);
+            call.on('stream', remoteStream => {
+              console.log("リモートから処理映像を受信");
+              // 受信した処理済み映像をvideo要素に表示
+              remoteVideo.srcObject = remoteStream;
+            });
+            call.on('close', () => {
+              console.log("通話が終了しました");
+            });
+            call.on('error', err => {
+              console.error("通話中にエラー:", err);
+            });
+            // 接続成功したのでUIを有効化
+            modeRadios.forEach(r => r.disabled = false);
+            // 現在は通常モードで開始するため、撮影ボタンは無効のまま
+            snapBtn.disabled = true;
+            // （必要なら）初期モードを計算側に通知
+            dataConn.send("mode_stream");
+            console.log("通常モードで開始しました");
+            // モード切替ラジオボタンの動作設定
+            modeRadios.forEach(radio => {
+              radio.onchange = () => {
+                if (!radio.checked) return;
+                if (radio.value === 'stream') {
+                  snapBtn.disabled = true;  // ストリーミング時は撮影ボタン無効
+                  dataConn.send("mode_stream");
+                  console.log("ストリーミングモードに切り替え（要求送信）");
+                } else if (radio.value === 'snap') {
+                  snapBtn.disabled = false; // スナップショット時は撮影ボタン有効
+                  dataConn.send("mode_snap");
+                  console.log("スナップショットモードに切り替え（要求送信）");
+                }
+              };
+            });
+            // 「撮影」ボタン押下でスナップショット要求メッセージ送信
+            snapBtn.onclick = () => {
+              dataConn.send("snap");
+              console.log("スナップショット要求を送信しました");
+            };
           });
           dataConn.on('error', err => {
-            console.error('Data connection error:', err);
+            console.error("DataConnectionエラー:", err);
           });
-          // Initiate media call to processing peer with our camera stream
-          call = peer.call(PROCESSING_PEER_ID, stream);
-          // When the processed stream is received, display it
-          call.on('stream', remoteStream => {
-            remoteVideo.srcObject = remoteStream;
-            statusText.textContent = "";  // Clear any status when video starts
-          });
-          call.on('error', err => {
-            console.error('Call error:', err);
-            statusText.textContent = "通話エラー: " + err;
-          });
-        });
+        }; // connectBtn.onclick
       })
       .catch(err => {
-        console.error("Camera access error:", err);
-        statusText.textContent = "カメラの起動に失敗しました: " + err.message;
+        console.error("カメラ映像の取得に失敗:", err);
       });
-
-    // Mode radio button change handler
-    for (let radio of modeRadio) {
-      radio.addEventListener('change', () => {
-        if (radio.checked) {
-          currentMode = radio.value;
-          if (currentMode === "snapshot") {
-            captureBtn.disabled = false;
-            statusText.textContent = ""; // clear status
-          } else { // live mode
-            captureBtn.disabled = true;
-            statusText.textContent = "ライブモード：映像をリアルタイム処理します";
-          }
-          // Notify server about mode change
-          if (dataConn && dataConn.open) {
-            dataConn.send({ type: 'mode', value: currentMode });
-          }
-        }
-      });
-    }
-
-    // Capture button handler (for snapshot mode)
-    captureBtn.addEventListener('click', () => {
-      if (currentMode !== "snapshot" || !dataConn) return;
-      // Send snapshot request to processing node
-      statusText.textContent = "送信済み / 処理中...";
-      dataConn.send({ type: 'snapshot' });
-      // We will clear or update status when new frame arrives
-      // (Alternatively, use a short timeout or remoteVideo event as an indicator)
-      remoteVideo.onloadeddata = () => {
-        // New frame likely loaded
-        statusText.textContent = ""; // processing complete (clear status)
-      };
-    });
   </script>
 </body>
 </html>
