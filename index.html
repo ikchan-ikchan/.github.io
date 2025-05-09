@@ -2,175 +2,124 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8" />
-  <title>WebRTC P2P デモ（スナップショット機能付き）</title>
-  <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
+  <title>WebRTC P2P 映像通話 (ライブ/スナップショット)</title>
   <style>
-    body { font-family: sans-serif; text-align: center; }
-    video { width: 320px; height: 240px; background:#000; }
-    #log { white-space: pre-wrap; background:#f7f7f7; padding:4px; margin-top:8px; text-align:left; }
-    #computeControls p, #computeControls button { margin: 4px; }
+    body { font-family: sans-serif; }
+    #controls { margin-bottom: 1em; }
+    #modeSelect label { margin-right: 1em; }
+    #status { color: blue; font-weight: bold; margin-left: 1em; }
+    video { width: 320px; height: 240px; background: #000; }
   </style>
 </head>
 <body>
-  <h1>WebRTC P2P デモ</h1>
-
-  <div>
-    <div style="display:inline-block;margin:0 20px;">
-      <h3>ローカル映像</h3>
-      <video id="localVideo" autoplay playsinline muted></video>
-    </div>
-    <div style="display:inline-block;margin:0 20px;">
-      <h3>リモート映像</h3>
-      <video id="remoteVideo" autoplay playsinline></video>
-    </div>
-  </div>
-
-  <hr/>
-
+  <h1>映像通話 デモ (ライブ・スナップショット対応)</h1>
   <div id="controls">
-    <p>自分のID: <span id="myId">―</span></p>
-
-    <!-- ユーザーモード UI -->
-    <div id="userControls">
-      <label for="videoSource">カメラ選択:</label>
-      <select id="videoSource"></select>
-      <button id="startCamera">カメラ開始</button><br/>
-      <input type="text" id="targetId" placeholder="相手のIDを入力" />
-      <button id="callBtn">発信</button>
+    <!-- Mode selection radio buttons -->
+    <div id="modeSelect">
+      <label><input type="radio" name="mode" value="live" checked> ライブモード</label>
+      <label><input type="radio" name="mode" value="snapshot"> スナップショットモード</label>
     </div>
-
-    <!-- 計算モード UI -->
-    <div id="computeControls" style="display:none;">
-      <p>計算ノードモード：Unity Video Capture を自動選択して待機します。</p>
-
-      <!-- モード選択 -->
-      <p>
-        <label><input type="radio" name="processMode" value="continuous" checked> 連続処理モード</label>
-        <label><input type="radio" name="processMode" value="snapshot"> スナップショットモード</label>
-      </p>
-      <!-- スナップショットボタン -->
-      <button id="snapshotBtn">撮影</button>
-    </div>
+    <!-- Snapshot capture button (enabled only in snapshot mode) -->
+    <button id="captureBtn" disabled>撮影</button>
+    <!-- Status text -->
+    <span id="status"></span>
   </div>
 
-  <h3>ログ</h3>
-  <div id="log">[INFO] ページ読み込み完了</div>
+  <!-- Video elements for local and remote streams -->
+  <video id="localVideo" autoplay playsinline muted></video>
+  <video id="remoteVideo" autoplay playsinline></video>
 
-<script>
-  const params = new URLSearchParams(location.search);
-  const role   = params.get('role');
-  const isCompute = role === 'compute';
+  <!-- Include PeerJS library -->
+  <script src="https://cdn.jsdelivr.net/npm/peerjs@1.4.0/dist/peerjs.min.js"></script>
+  <script>
+    const localVideo = document.getElementById('localVideo');
+    const remoteVideo = document.getElementById('remoteVideo');
+    const captureBtn = document.getElementById('captureBtn');
+    const statusText = document.getElementById('status');
+    const modeRadio = document.getElementsByName('mode');
 
-  const localVideo  = document.getElementById('localVideo');
-  const remoteVideo = document.getElementById('remoteVideo');
-  const myIdSpan    = document.getElementById('myId');
-  const logDiv      = document.getElementById('log');
+    // PeerJS setup: connect to PeerServer
+    const peer = new Peer(null, {
+      host: 'YOUR_PEERJS_SERVER_HOST',  // replace with actual PeerServer info
+      port: 9000,
+      path: '/peerjs'
+    });
+    const PROCESSING_PEER_ID = "processor-node-1";  // The fixed ID of the Python processing peer
 
-  const userControls    = document.getElementById('userControls');
-  const computeControls = document.getElementById('computeControls');
-  const videoSel        = document.getElementById('videoSource');
-  const startBtn        = document.getElementById('startCamera');
-  const targetInput     = document.getElementById('targetId');
-  const callBtn         = document.getElementById('callBtn');
-  const snapshotBtn     = document.getElementById('snapshotBtn');
+    let dataConn = null;
+    let call = null;
+    let currentMode = "live";
 
-  function log(msg){ console.log(msg); logDiv.textContent += '\n'+msg; }
-
-  const peer = new Peer();
-  peer.on('open', id => { myIdSpan.textContent = id; log(`[INFO] 自分のID: ${id}`); });
-  peer.on('error', err => log(`[ERROR] PeerJS: ${err}`));
-
-  // スナップショットリクエスト用フラグ
-  window.snapshotRequested = false;
-  snapshotBtn.onclick = () => {
-    window.snapshotRequested = true;
-    log("[INFO] 撮影リクエストを受け付けました");
-  };
-
-  if (isCompute) {
-    userControls.style.display    = 'none';
-    computeControls.style.display = 'block';
-    log("[INFO] 計算モード: Unity Video Capture を自動選択します");
-
-    navigator.mediaDevices.enumerateDevices()
-      .then(devs => {
-        const cam = devs.find(d => d.kind==='videoinput' && d.label.includes('Unity Video Capture'));
-        if (!cam) throw new Error("Unity Video Capture が見つかりません");
-        log(`[INFO] 「${cam.label}」を使用します`);
-        return navigator.mediaDevices.getUserMedia({
-          video:{ deviceId:{ exact: cam.deviceId }}, audio:false
-        });
-      })
+    // Get user camera stream
+    navigator.mediaDevices.getUserMedia({ video: true, audio: false })
       .then(stream => {
+        // Show local preview
         localVideo.srcObject = stream;
-        peer.on('call', call => {
-          log("[INFO] 着信: 計算ノード映像で応答します");
-          call.answer(stream);
-          call.on('stream', s => {
-            remoteVideo.srcObject = s;
-            log("[INFO] ユーザー映像を受信しました");
+
+        // When peer connection is open, initiate the call and data connection
+        peer.on('open', id => {
+          console.log("My peer ID:", id);
+          // Connect data channel to processing peer
+          dataConn = peer.connect(PROCESSING_PEER_ID);
+          dataConn.on('open', () => {
+            console.log('Data connection open');
+            // Send initial mode (live by default)
+            dataConn.send({ type: 'mode', value: currentMode });
+          });
+          dataConn.on('error', err => {
+            console.error('Data connection error:', err);
+          });
+          // Initiate media call to processing peer with our camera stream
+          call = peer.call(PROCESSING_PEER_ID, stream);
+          // When the processed stream is received, display it
+          call.on('stream', remoteStream => {
+            remoteVideo.srcObject = remoteStream;
+            statusText.textContent = "";  // Clear any status when video starts
+          });
+          call.on('error', err => {
+            console.error('Call error:', err);
+            statusText.textContent = "通話エラー: " + err;
           });
         });
       })
       .catch(err => {
-        log(`[ERROR] カメラ取得失敗: ${err.message}`);
-        peer.on('call', call => {
-          log("[WARN] 映像なしで応答します");
-          call.answer(null);
-        });
+        console.error("Camera access error:", err);
+        statusText.textContent = "カメラの起動に失敗しました: " + err.message;
       });
 
-  } else {
-    userControls.style.display    = 'block';
-    computeControls.style.display = 'none';
-    log("[INFO] ユーザーモード: カメラを選択してください");
-
-    navigator.mediaDevices.enumerateDevices().then(devs => {
-      videoSel.innerHTML = '';
-      devs.filter(d=>d.kind==='videoinput').forEach(d=>{
-        const o = document.createElement('option');
-        o.value = d.deviceId; o.text = d.label || d.deviceId;
-        videoSel.appendChild(o);
+    // Mode radio button change handler
+    for (let radio of modeRadio) {
+      radio.addEventListener('change', () => {
+        if (radio.checked) {
+          currentMode = radio.value;
+          if (currentMode === "snapshot") {
+            captureBtn.disabled = false;
+            statusText.textContent = ""; // clear status
+          } else { // live mode
+            captureBtn.disabled = true;
+            statusText.textContent = "ライブモード：映像をリアルタイム処理します";
+          }
+          // Notify server about mode change
+          if (dataConn && dataConn.open) {
+            dataConn.send({ type: 'mode', value: currentMode });
+          }
+        }
       });
-      if (!videoSel.options.length) log("[WARN] カメラが見つかりません");
+    }
+
+    // Capture button handler (for snapshot mode)
+    captureBtn.addEventListener('click', () => {
+      if (currentMode !== "snapshot" || !dataConn) return;
+      // Send snapshot request to processing node
+      statusText.textContent = "送信済み / 処理中...";
+      dataConn.send({ type: 'snapshot' });
+      // We will clear or update status when new frame arrives
+      // (Alternatively, use a short timeout or remoteVideo event as an indicator)
+      remoteVideo.onloadeddata = () => {
+        // New frame likely loaded
+        statusText.textContent = ""; // processing complete (clear status)
+      };
     });
-
-    startBtn.onclick = () => {
-      const id = videoSel.value;
-      if (!id) return log("[ERROR] カメラ選択してください");
-      navigator.mediaDevices.getUserMedia({
-        video:{ deviceId:{ exact:id }}, audio:false
-      })
-      .then(stream => {
-        localVideo.srcObject = stream;
-        window.localStream = stream;
-        log(`[INFO] カメラ開始: ${stream.getVideoTracks()[0].label}`);
-      })
-      .catch(e => log(`[ERROR] カメラ開始失敗: ${e.message}`));
-    };
-
-    callBtn.onclick = () => {
-      const target = targetInput.value.trim();
-      if (!target)       return log("[ERROR] 相手IDを入力してください");
-      if (!window.localStream) return log("[ERROR] カメラ開始してください");
-      log(`[INFO] 発信: ${target}`);
-      const call = peer.call(target, window.localStream);
-      call.on('stream', s => {
-        remoteVideo.srcObject = s;
-        log("[INFO] リモート映像を受信しました");
-      });
-      call.on('error', e => log(`[ERROR] 通話エラー: ${e}`));
-    };
-
-    peer.on('call', call => {
-      log("[INFO] 着信あり → 応答します");
-      call.answer(window.localStream || null);
-      call.on('stream', s => {
-        remoteVideo.srcObject = s;
-        log("[INFO] リモート映像を受信しました");
-      });
-    });
-  }
-</script>
+  </script>
 </body>
 </html>
