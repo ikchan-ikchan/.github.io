@@ -1,248 +1,240 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-  <meta charset="UTF-8">
-  <title>WebRTC P2P デモ（リアルタイム／スナップショット）</title>
+  <meta charset="UTF-8" />
+  <title>WebRTC P2P + Joystick Demo</title>
   <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
   <style>
     body   { font-family:sans-serif; text-align:center; }
     video  { width:320px; height:240px; background:#000; }
-    select,button,input { margin:4px 4px; }
-    #log   { height:120px; width:90%; margin:8px auto; background:#f0f0f0;
-             overflow-y:auto; white-space:pre-wrap; text-align:left; }
+    #log   { white-space:pre-wrap; background:#f7f7f7; padding:4px; margin-top:8px; text-align:left; }
+
+    /* ── 縦型ジョイスティック ─────────────────── */
+    #joystick{
+      width:60px; height:240px;
+      margin:20px auto; position:relative;
+      border:4px solid #000; border-radius:30px;
+      background:#fff;
+      touch-action:none;                 /* モバイルでのページスクロール抑止 */
+    }
+    #joystick #knob{
+      position:absolute; left:50%; top:50%;
+      width:40px; height:40px; margin:-20px;  /* 中央揃え */
+      border-radius:50%; background:#000;
+      transition:transform .15s;
+      pointer-events:none;
+    }
   </style>
 </head>
 <body>
-  <h2>WebRTC P2P デモ（リアルタイム／スナップショット）</h2>
+  <h1>WebRTC P2P デモ + ジョイスティック</h1>
 
-  <!-- 映像エリア -->
+  <!-- ★ 追加ジョイスティック ★ -->
+  <div id="joystick"><div id="knob"></div></div>
+
+  <!-- ビデオエリア -->
   <div>
-    <div style="display:inline-block; margin:0 16px;">
+    <div style="display:inline-block;margin:0 20px;">
       <h3>ローカル映像</h3>
       <video id="localVideo" autoplay playsinline muted></video>
     </div>
-    <div style="display:inline-block; margin:0 16px;">
+    <div style="display:inline-block;margin:0 20px;">
       <h3>リモート映像</h3>
       <video id="remoteVideo" autoplay playsinline></video>
     </div>
   </div>
-  <hr>
 
-  <!-- ユーザー/計算共有コントロール -->
-  <div id="sharedCtrl">
-    自分のPeerID：<span id="myId">—</span>
+  <hr/>
+
+  <!-- コントロール -->
+  <div id="controls">
+    <p>自分のID: <span id="myId">―</span></p>
+
+    <!-- ユーザー側操作 -->
+    <div id="userControls">
+      <label for="videoSource">カメラ選択:</label>
+      <select id="videoSource"></select>
+      <button id="startCamera">カメラ開始</button><br/>
+      <input type="text" id="targetId" placeholder="相手のIDを入力" />
+      <button id="callBtn">発信</button>
+    </div>
+
+    <!-- 計算側表示 -->
+    <div id="computeControls" style="display:none;">
+      <p>計算ノードモード：Unity Video Capture を自動選択して待機します。</p>
+    </div>
   </div>
 
-  <!-- ユーザーモード UI -->
-  <div id="userCtrl">
-    <label>カメラ選択：
-      <select id="videoSel"></select>
-    </label>
-    <button id="startCamBtn">カメラ開始</button><br>
-
-    処理モード：
-    <select id="modeSel">
-      <option value="realtime" selected>リアルタイム</option>
-      <option value="snapshot">スナップショット</option>
-    </select>
-    <button id="captureBtn" disabled>撮影</button><br>
-
-    相手ID：<input type="text" id="targetId" placeholder="計算ノードID">
-    <button id="callBtn">発信</button>
-  </div>
-
-  <!-- 計算モード UI -->
-  <div id="computeCtrl" style="display:none;">
-    <p>計算ノード：Unity Video Capture を自動取得して待機中…</p>
-  </div>
-
-  <!-- ログ -->
   <h3>ログ</h3>
   <div id="log">[INFO] ページ読み込み完了</div>
 
+<!-- --------------  JavaScript ------------------- -->
 <script>
-/* ========== 共通ユーティリティ ========== */
-const logDiv = document.getElementById('log');
-function log(msg){ console.log(msg); logDiv.textContent += '\n'+msg; logDiv.scrollTop = logDiv.scrollHeight; }
+/* ========= ジョイスティック制御 ========= */
+(function(){
+  const joy  = document.getElementById('joystick');
+  const knob = document.getElementById('knob');
+  let dragging=false, rect, maxY, value=0;
 
-/* ========== 役割判定 ========== */
-const params     = new URLSearchParams(location.search);
-const isCompute  = params.get('role') === 'compute';
+  const dispatch = v=>{
+    document.dispatchEvent(new CustomEvent('joystickMove',{ detail:{ value:v }}));
+  };
 
-/* ========== PeerJS 初期化 ========== */
+  const moveKnob = clientY=>{
+    let y = clientY - rect.top - rect.height/2;
+    y = Math.max(-maxY, Math.min(maxY, y));          // -maxY～+maxYに制限
+    knob.style.transform = `translate(-50%, calc(-50% + ${y}px))`;
+    value = y / maxY;                                // -1 (上) ～ +1 (下)
+    dispatch(value);
+  };
+
+  const centerKnob = ()=>{
+    knob.style.transition='transform .15s';
+    knob.style.transform='translate(-50%, -50%)';
+    value=0; dispatch(0);
+    setTimeout(()=>knob.style.transition='',160);
+  };
+
+  joy.addEventListener('pointerdown', e=>{
+    dragging=true;
+    rect = joy.getBoundingClientRect();
+    maxY = rect.height/2 - knob.offsetHeight/2;
+    moveKnob(e.clientY);
+    joy.setPointerCapture(e.pointerId);
+  });
+  joy.addEventListener('pointermove', e=>{
+    if(dragging) moveKnob(e.clientY);
+  });
+  joy.addEventListener('pointerup', ()=>{
+    dragging=false;
+    centerKnob();
+  });
+})();
+
+/* ========= 既存 WebRTC / PeerJS ロジック ========= */
+const params = new URLSearchParams(location.search);
+const role   = params.get('role');      // "compute" なら計算ノード
+const isCompute = role === 'compute';
+
+const localVideo  = document.getElementById('localVideo');
+const remoteVideo = document.getElementById('remoteVideo');
+const logDiv      = document.getElementById('log');
+const myIdSpan    = document.getElementById('myId');
+
+// ユーザーモード DOM
+const userControls = document.getElementById('userControls');
+const videoSel     = document.getElementById('videoSource');
+const startBtn     = document.getElementById('startCamera');
+const callBtn      = document.getElementById('callBtn');
+const targetInput  = document.getElementById('targetId');
+
+// 計算モード DOM
+const computeControls = document.getElementById('computeControls');
+
+// ログ関数
+function log(msg){ console.log(msg); logDiv.textContent += '\n' + msg; }
+
+/* ---- Peer 初期化 ---- */
 const peer = new Peer();
-let mediaConn = null;      // ビデオ通話用
-let dataConn  = null;      // 制御メッセージ用
-peer.on('open', id => {
-  document.getElementById('myId').textContent = id;
-  log(`[INFO] Peer 接続完了。自分ID: ${id}`);
+peer.on('open', id=>{
+  myIdSpan.textContent=id;
+  log(`[INFO] Peer 接続完了 ID=${id}`);
 });
-peer.on('error', err=>log(`[ERROR] Peer: ${err}`));
+peer.on('error', err=>log(`[ERROR] Peer エラー: ${err}`));
 
-/* ========== 計算ノードモード ========== */
-if (isCompute){
-  document.getElementById('userCtrl').style.display = 'none';
-  document.getElementById('computeCtrl').style.display = 'block';
+/* ---------- 計算モード ---------- */
+if(isCompute){
+  userControls.style.display='none';
+  computeControls.style.display='block';
+  log("[INFO] 計算モード: Unity Video Capture を自動検索");
 
-  // Unity Video Capture を探して取得
   navigator.mediaDevices.enumerateDevices()
     .then(devs=>{
-      const vc = devs.find(d=>d.kind==='videoinput' && d.label.includes('Unity Video Capture'));
-      if(!vc){ throw new Error('Unity Video Capture が見つかりません'); }
-      log(`[INFO] ${vc.label} を使用`);
-      return navigator.mediaDevices.getUserMedia({ video:{ deviceId:{ exact:vc.deviceId } }, audio:false });
+      const cam=devs.find(d=>d.kind==='videoinput' && d.label.includes('Unity Video Capture'));
+      if(!cam){ throw new Error("Unity Video Capture が見つかりません"); }
+      log(`[INFO] 「${cam.label}」を取得します…`);
+      return navigator.mediaDevices.getUserMedia({
+        video:{ deviceId:{ exact:cam.deviceId } }, audio:false
+      });
     })
     .then(stream=>{
-      localVideo.srcObject = stream;
-
-      /* 着信（MediaConnection）設定 */
+      localVideo.srcObject=stream;
+      log("[INFO] 仮想カメラ映像取得成功");
       peer.on('call', call=>{
-        log('[INFO] 通話着信 → 仮想カメラで応答');
-        mediaConn = call;
+        log("[INFO] 着信 → 映像で応答");
         call.answer(stream);
-        call.on('stream', s=>{ remoteVideo.srcObject = s; log('[INFO] ユーザー映像受信');});
+        call.on('stream', s=>{
+          remoteVideo.srcObject=s;
+          log("[INFO] リモート映像受信");
+        });
       });
-
-      /* 着信（DataConnection）設定  */
-      peer.on('connection', dc=>{
-        dataConn = dc;
-        log('[INFO] DataChannel 接続確立');
-        dc.on('data', handleDataMessage);
-      });
-
-      /* 制御メッセージ処理 */
-      let currentMode = 'realtime';
-      function handleDataMessage(msg){
-        if (msg === 'MODE_REALTIME' || msg === 'MODE_SNAPSHOT'){
-          currentMode = (msg==='MODE_REALTIME')?'realtime':'snapshot';
-          log(`[INFO] モード変更指示受信 → ${currentMode}`);
-          return;
-        }
-        if (typeof msg === 'string' && msg.startsWith('data:image')){
-          if (currentMode==='snapshot'){
-            // --- スナップショット1枚だけ処理 ---
-            sendToVirtualCam(msg);
-          }
-        } else if (currentMode==='realtime' && (typeof msg === 'string' || msg instanceof ArrayBuffer)){
-          // --- リアルタイムフレーム処理 ---
-          sendToVirtualCam(msg);
-        }
-      }
-
-      /* 仮想カメラへ送出（ここでは受信データをそのまま送る例）*/
-      function sendToVirtualCam(dataUrl){
-        const b64 = dataUrl.split(',')[1];
-        const frame = cv2imdecode(b64);
-        if (!window.vcam){
-          window.vcam = new pyvirtualcam.Camera({ width:frame.width, height:frame.height, fps:20, backend:'unitycapture' });
-          log('[INFO] 仮想カメラ開始');
-        }
-        window.vcam.send(frame.data);
-      }
-      /* ↑cv2imdecode等はPython的記法の擬似コード/概念です。
-         実際は計算ノード側ブラウザにJSで処理するか、Pythonで処理するかによって実装が変わります。*/
     })
-    .catch(err=>log(`[ERROR] 仮想カメラ取得失敗: ${err.message}`));
+    .catch(err=>{
+      log(`[ERROR] カメラ取得失敗: ${err.message}`);
+      peer.on('call', call=>{
+        log("[WARN] 着信 → 映像なしで応答");
+        call.answer(null);
+      });
+    });
 
-/* ========== ユーザーモード ========== */
-} else {
-  /* --- 要素取得 --- */
-  const videoSel   = document.getElementById('videoSel');
-  const startBtn   = document.getElementById('startCamBtn');
-  const modeSel    = document.getElementById('modeSel');
-  const captureBtn = document.getElementById('captureBtn');
-  const callBtn    = document.getElementById('callBtn');
-  const targetIn   = document.getElementById('targetId');
-  let localStream  = null;
+/* ---------- ユーザーモード ---------- */
+}else{
+  userControls.style.display='block';
+  computeControls.style.display='none';
+  log("[INFO] ユーザーモード: カメラ選択→開始");
 
-  // カメラ一覧をロード
   navigator.mediaDevices.enumerateDevices().then(devs=>{
     videoSel.innerHTML='';
     devs.filter(d=>d.kind==='videoinput').forEach(d=>{
       const opt=document.createElement('option');
-      opt.value=d.deviceId; opt.text=d.label||d.deviceId;
+      opt.value=d.deviceId;
+      opt.text =d.label||d.deviceId;
       videoSel.appendChild(opt);
     });
+    if(videoSel.options.length===0) log("[WARN] カメラが見つかりません");
   });
 
-  /* カメラ開始 */
-  startBtn.onclick = ()=>{
-    const id = videoSel.value;
-    if(!id){ log('[ERROR] カメラ未選択'); return; }
-    navigator.mediaDevices.getUserMedia({ video:{ deviceId:{ exact:id } }, audio:false })
-      .then(str=>{
-        localStream = str;
-        localVideo.srcObject = str;
-        log('[INFO] カメラ開始');
-      })
-      .catch(e=>log(`[ERROR] カメラ開始失敗: ${e.message}`));
+  startBtn.onclick=()=>{
+    const id=videoSel.value;
+    if(!id){ log("[ERROR] カメラ未選択"); return; }
+    navigator.mediaDevices.getUserMedia({
+      video:{ deviceId:{ exact:id } }, audio:false
+    }).then(stream=>{
+      localVideo.srcObject=stream;
+      window.localStream=stream;
+      log(`[INFO] カメラ開始 (${stream.getVideoTracks()[0].label})`);
+    }).catch(err=>log(`[ERROR] カメラ開始失敗: ${err.message}`));
   };
 
-  /* 発信ボタン */
-  callBtn.onclick = ()=>{
-    const targetId = targetIn.value.trim();
-    if(!targetId){ log('[ERROR] 相手ID未入力'); return; }
-    if(!localStream){ log('[ERROR] カメラ開始していません'); return; }
-    mediaConn = peer.call(targetId, localStream);
-    mediaConn.on('stream', s=>{ remoteVideo.srcObject = s; log('[INFO] 計算ノード映像受信'); });
-
-    // DataChannel 接続
-    dataConn  = peer.connect(targetId);
-    dataConn.on('open', ()=>{
-      log('[INFO] DataChannel 接続完了');
-      // 初期モードを通知
-      dataConn.send('MODE_REALTIME');
+  callBtn.onclick=()=>{
+    const target=targetInput.value.trim();
+    if(!target){ log("[ERROR] 相手ID未入力"); return; }
+    if(!window.localStream){ log("[ERROR] 先にカメラ開始"); return; }
+    log(`[INFO] 発信 → ${target}`);
+    const call=peer.call(target, window.localStream);
+    call.on('stream', s=>{
+      remoteVideo.srcObject=s;
+      log("[INFO] リモート映像受信");
     });
+    call.on('error', e=>log(`[ERROR] 通話エラー: ${e}`));
   };
 
-  /* 処理モード切替 */
-  let frameTimer = null;
-  modeSel.onchange = ()=>{
-    const mode = modeSel.value;
-    if (!dataConn || !dataConn.open){ log('[WARN] DataChannel未接続'); return; }
-    if (mode==='realtime'){
-      captureBtn.disabled=true;
-      dataConn.send('MODE_REALTIME');
-      // 連続送信開始
-      if(!frameTimer){
-        frameTimer=setInterval(sendFrame,100);
-      }
-    } else { // snapshot
-      captureBtn.disabled=false;
-      dataConn.send('MODE_SNAPSHOT');
-      // 連続送信停止
-      clearInterval(frameTimer); frameTimer=null;
-    }
-    log(`[INFO] モード変更: ${mode}`);
-  };
-
-  /* フレーム連続送信関数 */
-  function sendFrame(){
-    if(!localVideo.videoWidth) return;
-    const c=document.createElement('canvas');
-    c.width=localVideo.videoWidth;
-    c.height=localVideo.videoHeight;
-    c.getContext('2d').drawImage(localVideo,0,0,c.width,c.height);
-    dataConn.send(c.toDataURL('image/jpeg',0.8));
-  }
-
-  /* スナップショット撮影 */
-  captureBtn.onclick = ()=>{ sendFrame(); log('[INFO] スナップショット送信'); };
-
-  /* 着信を受けた場合（計算→ユーザー発信時）*/
   peer.on('call', call=>{
-    if(!localStream){ log('[WARN] 着信が来ましたがローカル映像無し→拒否'); return; }
-    mediaConn = call;
-    call.answer(localStream);
-    call.on('stream', s=>{ remoteVideo.srcObject = s; log('[INFO] 計算ノード映像受信'); });
-  });
-
-  /* DataConnection 着信（計算→ユーザー）*/
-  peer.on('connection', dc=>{
-    dataConn = dc; log('[INFO] DataChannel 接続完了(着信)');
-    dc.on('data', msg=>log('[INFO] 計算ノード→ユーザーへ:' + msg));
+    log("[INFO] 着信 → 応答");
+    call.answer(window.localStream||null);
+    call.on('stream', s=>{
+      remoteVideo.srcObject=s;
+      log("[INFO] リモート映像受信");
+    });
   });
 }
+
+/* ---------- ジョイスティックイベントデバッグ ---------- */
+document.addEventListener('joystickMove', e=>{
+  // e.detail.value が -1 ～ +1 の範囲
+  // ここで必要なら WebSocket 送信等のロジックを追加できる
+  log(`[DEBUG] Joystick value: ${e.detail.value.toFixed(2)}`);
+});
 </script>
 </body>
 </html>
