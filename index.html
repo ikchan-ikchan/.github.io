@@ -2,116 +2,114 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8" />
-  <title>PeerJSビデオ通話（ストリーミング/スナップショット切替）</title>
+  <title>WebRTC P2P デモ（ストリーミング／スナップショット）</title>
   <style>
-    video { border: 1px solid #333; margin: 4px; }
-    #controls { margin-top: 8px; }
+    video { width: 320px; height: 240px; background:#000; margin:4px; }
+    #log  { white-space: pre-wrap; background:#f7f7f7; padding:4px; text-align:left; }
   </style>
 </head>
 <body>
-  <!-- 自身のカメラ映像と、リモートからの処理映像を表示する video 要素 -->
-  <video id="localVideo" autoplay playsinline muted width="320" height="240"></video>
-  <video id="remoteVideo" autoplay playsinline width="320" height="240"></video>
-  <div id="controls">
-    <!-- 接続先ID入力と接続ボタン -->
-    相手ID: <input type="text" id="remoteIdInput" placeholder="接続先IDを入力" />
-    <button id="connectBtn">接続</button>
-    <br/>
-    <!-- モード切替ラジオボタン -->
-    モード:
-    <label><input type="radio" name="mode" value="stream" checked> 通常モード</label>
-    <label><input type="radio" name="mode" value="snap"> スナップショットモード</label>
-    <!-- 撮影ボタン（スナップショット要求） -->
-    <button id="snapBtn" disabled>撮影</button>
+  <h2>WebRTC P2P デモ</h2>
+  <!-- 映像プレビュー -->
+  <video id="localVideo"  autoplay playsinline muted></video>
+  <video id="remoteVideo" autoplay playsinline></video>
+
+  <!-- ── 既存 UI（カメラ選択＋接続）を温存 ── -->
+  <div>
+    相手ID: <input type="text" id="remoteId" placeholder="計算ノードID" />
+    <button id="connect">接続</button><br>
+    カメラ: <select id="camSelect"></select>
+    <button id="startCam">カメラ開始</button>
   </div>
 
-  <!-- PeerJSのクライアントライブラリを読み込み -->
+  <!-- ★ 追加：モード切替と撮影ボタン ★ -->
+  <fieldset style="display:inline-block;margin-top:6px;">
+    <legend>処理モード</legend>
+    <label><input type="radio" name="mode" value="stream" checked> 通常</label>
+    <label><input type="radio" name="mode" value="snap"> スナップショット</label>
+    <button id="snapBtn" disabled>撮影</button>
+  </fieldset>
+
+  <h3>ログ</h3>
+  <div id="log">ページ読み込み完了</div>
+
   <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
   <script>
-    const localVideo = document.getElementById('localVideo');
-    const remoteVideo = document.getElementById('remoteVideo');
-    const remoteIdInput = document.getElementById('remoteIdInput');
-    const connectBtn = document.getElementById('connectBtn');
-    const snapBtn = document.getElementById('snapBtn');
-    const modeRadios = document.querySelectorAll('input[name="mode"]');
+    /* 省スペースのためエラーチェック簡略化。カメラ許可→選択→接続の流れは
+       これまでの UI を一切削らず温存。 */
 
-    // PeerJSでPeerを作成（シグナリングサーバーに接続）
-    const peer = new Peer();  // IDは自動割当て（デフォルトのPeerServerを使用）
-    peer.on('open', id => {
-      console.log("自分のID: " + id);
+    const log = msg => (console.log(msg), logDiv.textContent += '\n'+msg);
+    const logDiv     = document.getElementById('log');
+    const localV     = document.getElementById('localVideo');
+    const remoteV    = document.getElementById('remoteVideo');
+    const camSel     = document.getElementById('camSelect');
+    const startBtn   = document.getElementById('startCam');
+    const connectBtn = document.getElementById('connect');
+    const remoteIdIn = document.getElementById('remoteId');
+    const modeRads   = document.querySelectorAll('input[name="mode"]');
+    const snapBtn    = document.getElementById('snapBtn');
+
+    const peer = new Peer();      // 自動ID
+    let dataConn = null;          // データチャネル
+    let localStream = null;
+
+    peer.on('open', id => log('[INFO] 自分のID: '+id));
+    peer.on('error', err => log('[ERROR] Peer: '+err));
+
+    // カメラリスト
+    navigator.mediaDevices.enumerateDevices().then(ds=>{
+      ds.filter(d=>d.kind==='videoinput').forEach(d=>{
+        const o=document.createElement('option');
+        o.value=d.deviceId; o.text=d.label||d.deviceId;
+        camSel.appendChild(o);
+      });
     });
 
-    // カメラ映像を取得
-    navigator.mediaDevices.getUserMedia({ video: true, audio: false })
-      .then(stream => {
-        // 自分の映像をページ上に表示（ローカルプレビュー）
-        localVideo.srcObject = stream;
+    // カメラ開始
+    startBtn.onclick = async ()=>{
+      localStream = await navigator.mediaDevices.getUserMedia({
+        video:{deviceId:{exact:camSel.value}}, audio:false});
+      localV.srcObject = localStream;
+      log('[INFO] カメラ開始: '+localStream.getVideoTracks()[0].label);
+    };
 
-        // 「接続」ボタン押下時の処理: 相手Peerに接続して通話を開始
-        connectBtn.onclick = () => {
-          const remoteId = remoteIdInput.value.trim();
-          if (!remoteId) {
-            alert("接続先IDを入力してください");
-            return;
-          }
-          console.log("接続要求: 相手ID=" + remoteId);
-          // データチャネル接続を開始
-          const dataConn = peer.connect(remoteId);
-          dataConn.on('open', () => {
-            console.log("DataConnectionがオープンしました");
-            // 受信メッセージがあればログ表示（必要に応じて）
-            dataConn.on('data', data => {
-              console.log("受信メッセージ:", data);
-            });
-            // メディア通話を開始（自分の映像を送信）
-            const call = peer.call(remoteId, stream);
-            call.on('stream', remoteStream => {
-              console.log("リモートから処理映像を受信");
-              // 受信した処理済み映像をvideo要素に表示
-              remoteVideo.srcObject = remoteStream;
-            });
-            call.on('close', () => {
-              console.log("通話が終了しました");
-            });
-            call.on('error', err => {
-              console.error("通話中にエラー:", err);
-            });
-            // 接続成功したのでUIを有効化
-            modeRadios.forEach(r => r.disabled = false);
-            // 現在は通常モードで開始するため、撮影ボタンは無効のまま
-            snapBtn.disabled = true;
-            // （必要なら）初期モードを計算側に通知
-            dataConn.send("mode_stream");
-            console.log("通常モードで開始しました");
-            // モード切替ラジオボタンの動作設定
-            modeRadios.forEach(radio => {
-              radio.onchange = () => {
-                if (!radio.checked) return;
-                if (radio.value === 'stream') {
-                  snapBtn.disabled = true;  // ストリーミング時は撮影ボタン無効
-                  dataConn.send("mode_stream");
-                  console.log("ストリーミングモードに切り替え（要求送信）");
-                } else if (radio.value === 'snap') {
-                  snapBtn.disabled = false; // スナップショット時は撮影ボタン有効
-                  dataConn.send("mode_snap");
-                  console.log("スナップショットモードに切り替え（要求送信）");
-                }
-              };
-            });
-            // 「撮影」ボタン押下でスナップショット要求メッセージ送信
-            snapBtn.onclick = () => {
-              dataConn.send("snap");
-              console.log("スナップショット要求を送信しました");
-            };
-          });
-          dataConn.on('error', err => {
-            console.error("DataConnectionエラー:", err);
-          });
-        }; // connectBtn.onclick
-      })
-      .catch(err => {
-        console.error("カメラ映像の取得に失敗:", err);
+    // 接続
+    connectBtn.onclick = ()=>{
+      const id = remoteIdIn.value.trim();
+      if(!id||!localStream){ log('[ERROR] 接続前にカメラ開始'); return; }
+      // データチャネル
+      dataConn = peer.connect(id);
+      dataConn.on('open', ()=>{
+        log('[INFO] DataConnection開通');
+        dataConn.on('data', d=>log('[INFO] ↑計算ノード→'+d));
+        // まず現在モードを通知
+        dataConn.send('mode_stream');
       });
+      // メディア通話
+      const call = peer.call(id, localStream);
+      call.on('stream', s=>{ remoteV.srcObject=s; log('[INFO] 処理映像受信');});
+    };
+
+    // モード切替
+    modeRads.forEach(r=>{
+      r.onchange = ()=>{
+        if(!dataConn||dataConn.open===false)return;
+        if(r.value==='stream'){
+          snapBtn.disabled=true;
+          dataConn.send('mode_stream');
+          log('[INFO] →ストリーミングモード要求送信');
+        }else{
+          snapBtn.disabled=false;
+          dataConn.send('mode_snap');
+          log('[INFO] →スナップショットモード要求送信');
+        }
+      };
+    });
+
+    // 撮影ボタン
+    snapBtn.onclick = ()=>{
+      if(dataConn&&dataConn.open){ dataConn.send('snap'); log('[INFO] スナップ要求送信'); }
+    };
   </script>
 </body>
 </html>
