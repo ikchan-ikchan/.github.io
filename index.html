@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8" />
-  <title>WebRTC P2P + Joystick レスポンシブ版</title>
+  <title>WebRTC P2P + Joystick (スクロール抑制版)</title>
   <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
   <style>
     body {
@@ -31,7 +31,9 @@
       border: 4px solid #000;
       border-radius: 30px;
       background: #fff;
+      /* ここでスクロール／パンを抑制 */
       touch-action: none;
+      overscroll-behavior: contain;
     }
     /* ノブ */
     #joystick #knob {
@@ -73,13 +75,12 @@
       #remoteVideo { grid-area: remoteVideo; }
       #joystick    { grid-area: joystick; }
     }
-
-    /* ─── 状態表示 ─── */
+    /* 状態表示 */
     #joystickState {
       font-weight: bold;
       margin-top: 4px;
     }
-    /* ─── コントロール & ログ ─── */
+    /* コントロール & ログ */
     #controls {
       padding: 10px;
     }
@@ -101,7 +102,7 @@
   </style>
 </head>
 <body>
-  <h1>WebRTC P2P デモ + Joystick (レスポンシブ)</h1>
+  <h1>WebRTC P2P デモ + Joystick</h1>
 
   <!-- メディア＆ジョイスティック領域 -->
   <div id="mediaArea">
@@ -117,7 +118,7 @@
   <div id="controls">
     <p>自分のID: <span id="myId">―</span></p>
 
-    <!-- ユーザー側 -->
+    <!-- ユーザーモード -->
     <div id="userControls">
       <label>カメラ選択:
         <select id="videoSource"></select>
@@ -127,7 +128,7 @@
       <button id="callBtn">発信</button>
     </div>
 
-    <!-- 計算側 -->
+    <!-- 計算モード -->
     <div id="computeControls" style="display:none;">
       <p>計算ノードモード：Unity Video Capture を自動取得して待機します。</p>
     </div>
@@ -136,58 +137,59 @@
   <h3>ログ</h3>
   <div id="log">[INFO] ページ読み込み完了</div>
 
-<script>
-  /*===============================================================
-    ジョイスティック制御：上下ドラッグ → 離すと中央復帰・3状態表示
-  ================================================================*/
+  <script>
+  /*======================
+    ジョイスティック制御
+  ======================*/
   (function(){
     const joy       = document.getElementById('joystick');
     const knob      = document.getElementById('knob');
     const stateDiv  = document.getElementById('joystickState');
-    let dragging=false, rect, maxY, value=0;
+    let dragging=false, rect, maxY;
 
     function updateState(v){
-      if(v < -0.5) stateDiv.textContent='上';
-      else if(v > 0.5) stateDiv.textContent='下';
-      else           stateDiv.textContent='中心';
+      stateDiv.textContent = v < -0.5 ? '上' : v > 0.5 ? '下' : '中心';
     }
 
     function moveKnob(clientY){
       let y = clientY - (rect.top + rect.height/2);
       y = Math.max(-maxY, Math.min(maxY, y));
       knob.style.transform = `translate(-50%, calc(-50% + ${y}px))`;
-      value = y / maxY;
-      updateState(value);
+      updateState(y / maxY);
     }
 
     function centerKnob(){
       knob.style.transition = 'transform 0.15s';
       knob.style.transform  = 'translate(-50%, -50%)';
-      value = 0;
-      updateState(value);
+      updateState(0);
       setTimeout(()=> knob.style.transition='', 160);
     }
 
+    // ポインターイベントで preventDefault を呼び出しスクロール抑制
     joy.addEventListener('pointerdown', e=>{
+      e.preventDefault();
       dragging = true;
-      rect = joy.getBoundingClientRect();
-      maxY = rect.height/2 - knob.offsetHeight/2;
+      rect     = joy.getBoundingClientRect();
+      maxY     = rect.height/2 - knob.offsetHeight/2;
       moveKnob(e.clientY);
       joy.setPointerCapture(e.pointerId);
-    });
+    }, { passive: false });
+
     joy.addEventListener('pointermove', e=>{
+      e.preventDefault();
       if(dragging) moveKnob(e.clientY);
-    });
+    }, { passive: false });
+
     joy.addEventListener('pointerup', e=>{
-      dragging = false;
+      e.preventDefault();
+      dragging=false;
       centerKnob();
-    });
+    }, { passive: false });
   })();
 
-  /*===============================================================
-   以下、PeerJSベースのP2Pビデオ通話ロジック（ユーザー／計算）
-   ※前回と同じく省略せず全文掲載しています
-  ================================================================*/
+  /*======================
+    PeerJS P2P ロジック（ユーザー／計算）
+  ======================*/
   const params    = new URLSearchParams(location.search);
   const role      = params.get('role');
   const isCompute = role === 'compute';
@@ -219,7 +221,7 @@
   });
 
   if(isCompute){
-    // ── 計算モード
+    // 計算ノード
     userControls.style.display    = 'none';
     computeControls.style.display = 'block';
     log("[INFO] 計算モード：Unity Video Capture を自動選択します");
@@ -227,8 +229,7 @@
     navigator.mediaDevices.enumerateDevices()
       .then(devs => {
         const cam = devs.find(d=>
-          d.kind==='videoinput' &&
-          d.label.includes('Unity Video Capture')
+          d.kind==='videoinput' && d.label.includes('Unity Video Capture')
         );
         if(!cam){
           log("[ERROR] Unity Video Capture が見つかりません");
@@ -261,12 +262,12 @@
       });
 
   } else {
-    // ── ユーザーモード
+    // ユーザーモード
     userControls.style.display    = 'block';
     computeControls.style.display = 'none';
     log("[INFO] ユーザーモード：カメラを選択してください");
 
-    // デバイス一覧
+    // カメラ一覧取得
     navigator.mediaDevices.enumerateDevices()
       .then(devs=>{
         videoSelect.innerHTML = '';
@@ -279,6 +280,7 @@
         if(videoSelect.options.length===0) log("[WARN] カメラがありません");
       });
 
+    // カメラ開始
     startCamBtn.onclick = ()=>{
       const id = videoSelect.value;
       if(!id){ log("[ERROR] カメラ未選択"); return; }
@@ -293,6 +295,7 @@
       .catch(err=> log(`[ERROR] カメラ取得失敗: ${err.message}`));
     };
 
+    // 発信
     callBtn.onclick = ()=>{
       const tgt = targetInput.value.trim();
       if(!tgt){ log("[ERROR] IDを入力してください"); return; }
@@ -310,6 +313,7 @@
       });
     };
 
+    // 着信応答
     peer.on('call', call=>{
       log("[INFO] 着信 → 応答");
       call.answer(window.localStream || null);
@@ -319,6 +323,6 @@
       });
     });
   }
-</script>
+  </script>
 </body>
 </html>
