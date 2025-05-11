@@ -2,324 +2,206 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8" />
-  <title>WebRTC P2P デモ + Joystick（ユーザーのみ表示）</title>
-  <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
+  <title>P2P ビデオ通話 - ジョイスティック制御版</title>
   <style>
-    body {
-      font-family: sans-serif;
-      text-align: center;
-      margin: 0;
-      padding: 0;
-    }
-    /* ─── メディアエリア ─── */
-    #mediaArea {
-      display: grid;
-      grid-gap: 10px;
-      padding: 10px;
-    }
-    #localVideo, #remoteVideo {
-      width: 100%;
-      height: auto;
-      background: #000;
-    }
-    /* Portrait: ２段＋右ジョイスティック */
-    @media (orientation: portrait) {
-      #mediaArea {
-        grid-template-columns: 1fr auto;
-        grid-template-rows: auto auto;
-        grid-template-areas:
-          "localVideo joystick"
-          "remoteVideo joystick";
-        align-items: center;
-        height: calc(100vh - 200px);
-      }
-    }
-    /* Landscape: 左ビデオ＋中央ジョイスティック＋右ビデオ */
-    @media (orientation: landscape) {
-      #mediaArea {
-        grid-template-columns: 1fr auto 1fr;
-        grid-template-rows: auto;
-        grid-template-areas:
-          "localVideo joystick remoteVideo";
-        align-items: center;
-        height: calc(100vh - 200px);
-      }
-    }
-    #localVideo  { grid-area: localVideo; }
-    #remoteVideo { grid-area: remoteVideo; }
-
-    /* ジョイスティック枠 (ユーザーモード時のみ表示) */
-    #joystick {
-      box-sizing: border-box;
-      width: 60px; height: 240px;
-      margin: auto;
-      position: relative;
-      border: 4px solid #000;
-      border-radius: 30px;
-      background: #fff;
-      touch-action: none;
-      overscroll-behavior: contain;
-      grid-area: joystick;
-    }
-    /* ノブ */
-    #joystick #knob {
-      position: absolute;
-      left: 50%; top: 50%;
-      width: 40px; height: 40px;
-      border-radius: 50%;
-      background: #000;
-      transform: translate(-50%, -50%);
-      transition: transform 0.15s;
-      pointer-events: none;
-    }
-    /* 状態表示 (ユーザーモード時のみ) */
-    #joystickState {
-      font-weight: bold;
-      margin-top: 4px;
-    }
-    /* ─── コントロール & ログ ─── */
-    #controls {
-      padding: 10px;
-    }
-    #controls select,
-    #controls input,
-    #controls button {
-      margin: 4px;
-    }
-    #log {
-      white-space: pre-wrap;
-      background: #f7f7f7;
-      padding: 8px;
-      margin: 8px;
-      text-align: left;
-      height: 120px;
-      overflow-y: auto;
-      font-size: 0.9em;
-    }
+    body { font-family: sans-serif; text-align: center; margin: 0; padding: 0; }
+    #video-area { display: flex; justify-content: center; align-items: center; margin: 15px; }
+    video, img { background: #000; border: 2px solid #333; }
+    #localVideo { width: 320px; height: 240px; margin: 5px; }
+    #outputBox  { position: relative; width: 320px; height: 240px; margin: 5px; }
+    #outputBox video, #outputBox img { width: 100%; height: 100%; object-fit: contain; }
+    #joyBox { display: flex; flex-direction: column; align-items: center; margin: 0 15px; }
+    #joyBox button { font-size: 16px; padding: 10px 22px; margin: 10px 0; cursor: pointer; }
+    #vidCtrl { position: absolute; bottom: 5px; left: 5px; background: rgba(0,0,0,.6);
+               padding: 4px; display: flex; gap: 4px; }
+    #vidCtrl button { font-size: 12px; padding: 3px 8px; cursor: pointer; }
+    #status { color: green; margin-top: 8px; }
   </style>
 </head>
 <body>
-  <h1>WebRTC P2P デモ + Joystick</h1>
+  <h2>P2P ビデオ通話（ジョイスティック操作で静止画 / 動画送信）</h2>
 
-  <!-- メディア＆ジョイスティック領域 -->
-  <div id="mediaArea">
-    <video id="localVideo" autoplay playsinline muted></video>
-    <video id="remoteVideo" autoplay playsinline></video>
-    <div id="joystick"><div id="knob"></div></div>
-  </div>
-  <div id="joystickState">中心</div>
+  <div id="video-area">
+    <video id="localVideo" autoplay muted playsinline></video>
 
-  <hr/>
-
-  <!-- 通信コントロール -->
-  <div id="controls">
-    <p>自分のID: <span id="myId">―</span></p>
-
-    <!-- ユーザーモード -->
-    <div id="userControls">
-      <label>カメラ選択:
-        <select id="videoSource"></select>
-      </label>
-      <button id="startCamera">カメラ開始</button><br/>
-      <input type="text" id="targetId" placeholder="相手のIDを入力" />
-      <button id="callBtn">発信</button>
+    <!-- ジョイスティック操作をボタンで代用 -->
+    <div id="joyBox">
+      <button id="snapBtn">📸 上（静止画）</button>
+      <button id="recBtn">🔴 下（長押し）</button>
     </div>
 
-    <!-- 計算モード -->
-    <div id="computeControls" style="display:none;">
-      <p>計算ノードモード：Unity Video Capture を自動取得して待機します。</p>
+    <!-- 処理結果表示枠（静止画も動画も共通）-->
+    <div id="outputBox">
+      <img   id="outputImg"  alt="処理済み画像" style="display:none;">
+      <video id="outputVid" playsinline style="display:none;"></video>
+
+      <!-- 動画用カスタムコントロール -->
+      <div id="vidCtrl" style="display:none;">
+        <button id="playBtn">▶ 再生</button>
+        <button id="stopBtn">■ 停止</button>
+        <button id="loopBtn">ループ: いいえ</button>
+      </div>
     </div>
   </div>
 
-  <h3>ログ</h3>
-  <div id="log">[INFO] ページ読み込み完了</div>
+  <div id="status">カメラ初期化中…</div>
 
-<script>
-  /*======================
-    ジョイスティック制御
-  ======================*/
-  (function(){
-    const joy       = document.getElementById('joystick');
-    const knob      = document.getElementById('knob');
-    const stateDiv  = document.getElementById('joystickState');
-    let dragging=false, rect, maxY;
+  <!-- PeerJS CDN -->
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+  <script>
+    /********* DOM 取得 *********/
+    const localVideo  = document.getElementById('localVideo');
+    const outputImg   = document.getElementById('outputImg');
+    const outputVid   = document.getElementById('outputVid');
+    const vidCtrl     = document.getElementById('vidCtrl');
+    const playBtn     = document.getElementById('playBtn');
+    const stopBtn     = document.getElementById('stopBtn');
+    const loopBtn     = document.getElementById('loopBtn');
+    const statusTxt   = document.getElementById('status');
+    const snapBtn     = document.getElementById('snapBtn');
+    const recBtn      = document.getElementById('recBtn');
 
-    function updateState(v){
-      stateDiv.textContent = v < -0.5 ? '上' : v > 0.5 ? '下' : '中心';
-    }
+    /********* グローバル状態 *********/
+    let localStream = null;         // ユーザーのカメラ映像
+    let peer = null;                // PeerJS インスタンス
+    let conn = null;                // DataConnection
+    let waitType = null;            // "image" | "video" | null
+    let recording = false;          // 録画中フラグ
+    let recTimeout = null;          // 30秒自動停止
+    const videoType = "video/webm"; // 受信動画の MIME
 
-    function moveKnob(clientY){
-      let y = clientY - (rect.top + rect.height/2);
-      y = Math.max(-maxY, Math.min(maxY, y));
-      knob.style.transform = `translate(-50%, calc(-50% + ${y}px))`;
-      updateState(y / maxY);
-    }
-
-    function centerKnob(){
-      knob.style.transition = 'transform 0.15s';
-      knob.style.transform  = 'translate(-50%, -50%)';
-      updateState(0);
-      setTimeout(()=> knob.style.transition='', 160);
-    }
-
-    // ページが計算モードならジョイスティックを隠す
-    const isCompute = new URLSearchParams(location.search).get('role') === 'compute';
-    if(isCompute){
-      joy.style.display = 'none';
-      stateDiv.style.display = 'none';
-    }
-
-    joy.addEventListener('pointerdown', e=>{
-      e.preventDefault();
-      dragging = true;
-      rect     = joy.getBoundingClientRect();
-      maxY     = rect.height/2 - knob.offsetHeight/2;
-      moveKnob(e.clientY);
-      joy.setPointerCapture(e.pointerId);
-    }, { passive: false });
-
-    joy.addEventListener('pointermove', e=>{
-      e.preventDefault();
-      if(dragging) moveKnob(e.clientY);
-    }, { passive: false });
-
-    joy.addEventListener('pointerup', e=>{
-      e.preventDefault();
-      dragging=false;
-      centerKnob();
-    }, { passive: false });
-  })();
-
-  /*======================
-    PeerJS P2P ロジック
-  ======================*/
-  const params    = new URLSearchParams(location.search);
-  const role      = params.get('role');
-  const isCompute = role === 'compute';
-
-  const localVideo      = document.getElementById('localVideo');
-  const remoteVideo     = document.getElementById('remoteVideo');
-  const myIdSpan        = document.getElementById('myId');
-  const logDiv          = document.getElementById('log');
-  const userControls    = document.getElementById('userControls');
-  const computeControls = document.getElementById('computeControls');
-  const videoSelect     = document.getElementById('videoSource');
-  const startCamBtn     = document.getElementById('startCamera');
-  const targetInput     = document.getElementById('targetId');
-  const callBtn         = document.getElementById('callBtn');
-
-  function log(msg){
-    console.log(msg);
-    logDiv.textContent += '\n' + msg;
-  }
-
-  // PeerJS 初期化
-  const peer = new Peer();
-  peer.on('open', id=>{
-    myIdSpan.textContent = id;
-    log(`[INFO] 接続完了。自分のID: ${id}`);
-  });
-  peer.on('error', err=>{
-    log(`[ERROR] PeerJS エラー: ${err}`);
-  });
-
-  if(isCompute){
-    userControls.style.display    = 'none';
-    computeControls.style.display = 'block';
-    log("[INFO] 計算モード：Unity Video Capture を自動選択します");
-
-    navigator.mediaDevices.enumerateDevices()
-      .then(devs => {
-        const cam = devs.find(d=>
-          d.kind==='videoinput' && d.label.includes('Unity Video Capture')
-        );
-        if(!cam){
-          log("[ERROR] Unity Video Capture が見つかりません");
-          throw new Error("仮想カメラ未検出");
-        }
-        log(`[INFO] 「${cam.label}」を選択します`);
-        return navigator.mediaDevices.getUserMedia({
-          video:{ deviceId:{ exact: cam.deviceId } },
-          audio:false
-        });
-      })
-      .then(stream=>{
+    /********* カメラ取得 *********/
+    navigator.mediaDevices.getUserMedia({ video:true, audio:false })
+      .then(stream => {
+        localStream = stream;
         localVideo.srcObject = stream;
-        log("[INFO] 仮想カメラ映像を取得しました");
-        peer.on('call', call=>{
-          log("[INFO] 着信 → 仮想カメラ映像で応答");
-          call.answer(stream);
-          call.on('stream', s=>{
-            remoteVideo.srcObject = s;
-            log("[INFO] ユーザー映像を受信");
-          });
-        });
+        status("カメラ準備完了。接続中…");
+        initPeer();
       })
-      .catch(err=>{
-        log(`[ERROR] カメラ取得失敗: ${err.message}`);
-        peer.on('call', call=>{
-          log("[WARN] 映像なしで応答");
-          call.answer(null);
-        });
+      .catch(e => {
+        err("カメラ取得失敗: "+e.message);
       });
 
-  } else {
-    userControls.style.display    = 'block';
-    computeControls.style.display = 'none';
-    log("[INFO] ユーザーモード：カメラを選択してください");
-
-    navigator.mediaDevices.enumerateDevices()
-      .then(devs=>{
-        videoSelect.innerHTML = '';
-        devs.filter(d=>d.kind==='videoinput').forEach(d=>{
-          const o = document.createElement('option');
-          o.value = d.deviceId;
-          o.text  = d.label || d.deviceId;
-          videoSelect.appendChild(o);
+    /********* PeerJS 初期化 *********/
+    function initPeer(){
+      peer = new Peer(null, { debug:1 });
+      peer.on('open', id=>{
+        console.log("自分の PeerID:", id);
+        conn = peer.connect("compute123");   // 計算側ID
+        conn.on('open', ()=> {
+          status("計算側と接続しました");
+          conn.on('data', onData);
         });
-        if(videoSelect.options.length===0) log("[WARN] カメラがありません");
+        conn.on('error', e=> err("接続エラー: "+e));
       });
+      peer.on('error', e=> err("PeerJS エラー: "+e));
+    }
 
-    startCamBtn.onclick = ()=>{
-      const id = videoSelect.value;
-      if(!id){ log("[ERROR] カメラ未選択"); return; }
-      navigator.mediaDevices.getUserMedia({
-        video:{ deviceId:{ exact:id } }, audio:false
-      })
-      .then(stream=>{
-        localVideo.srcObject = stream;
-        window.localStream = stream;
-        log(`[INFO] カメラ開始: ${stream.getVideoTracks()[0].label}`);
-      })
-      .catch(err=> log(`[ERROR] カメラ取得失敗: ${err.message}`));
+    /********* ステータス表示 *********/
+    function status(t){ statusTxt.style.color="green"; statusTxt.textContent=t; }
+    function err(t){ statusTxt.style.color="red"; statusTxt.textContent=t; }
+
+    /********* スナップ送信 *********/
+    snapBtn.onclick = ()=> {
+      if(!conn?.open) return;
+      takeSnapshot();   // 静止画撮影＆送信
     };
 
-    callBtn.onclick = ()=>{
-      const tgt = targetInput.value.trim();
-      if(!tgt){ log("[ERROR] IDを入力してください"); return; }
-      if(!window.localStream){
-        log("[ERROR] 先にカメラ開始"); return;
-      }
-      log(`[INFO] 発信 → ${tgt}`);
-      const call = peer.call(tgt, window.localStream);
-      call.on('stream', s=>{
-        remoteVideo.srcObject = s;
-        log("[INFO] リモート映像を受信");
-      });
-      call.on('error', e=>{
-        log(`[ERROR] 通話エラー: ${e}`);
-      });
-    };
+    function takeSnapshot(){
+      const [w,h] = getVideoSize();
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      canvas.getContext('2d').drawImage(localVideo,0,0,w,h);
+      canvas.toBlob(blob=>{
+        waitType="image";
+        conn.send("SNAP");
+        conn.send(blob);
+        status("静止画を送信しました。処理待ち…");
+      },'image/jpeg',0.8);
+    }
 
-    peer.on('call', call=>{
-      log("[INFO] 着信 → 応答");
-      call.answer(window.localStream || null);
-      call.on('stream', s=>{
-        remoteVideo.srcObject = s;
-        log("[INFO] リモート映像を受信");
-      });
+    /********* 録画送信 *********/
+    recBtn.addEventListener('pointerdown', ()=> {
+      if(recording||!conn?.open) return;
+      startRecord();
     });
-  }
+    recBtn.addEventListener('pointerup', stopRecord);
+    recBtn.addEventListener('pointerleave', stopRecord);
+
+    function startRecord(){
+      recording = true;
+      status("録画開始（最大30秒）…");
+      conn.send("VIDEO_START");
+      captureLoop();
+      recTimeout = setTimeout(stopRecord, 30000);
+    }
+    function stopRecord(){
+      if(!recording) return;
+      recording=false;
+      clearTimeout(recTimeout);
+      conn.send("VIDEO_END");
+      waitType="video";
+      status("録画終了。処理待ち…");
+    }
+    function captureLoop(){
+      if(!recording) return;
+      const [w,h] = getVideoSize();
+      const cv = document.createElement('canvas');
+      cv.width=w; cv.height=h;
+      cv.getContext('2d').drawImage(localVideo,0,0,w,h);
+      cv.toBlob(b=>{
+        if(recording) conn.send(b);
+      },'image/jpeg',0.7);
+      setTimeout(captureLoop, 66); // 約15fps
+    }
+
+    /********* データ受信 *********/
+    function onData(d){
+      if(typeof d==="string"){
+        if(d==="SNAP_RESULT")  waitType="image";
+        else if(d==="VIDEO_RESULT") waitType="video";
+        return;
+      }
+      // Blob/ArrayBuffer
+      if(waitType==="image"){
+        const blob = d instanceof Blob ? d : new Blob([d],{type:'image/jpeg'});
+        showImage(blob);
+      }else if(waitType==="video"){
+        const blob = d instanceof Blob ? d : new Blob([d],{type:videoType});
+        showVideo(blob);
+      }
+      waitType=null;
+    }
+
+    /********* 表示ヘルパ *********/
+    function showImage(blob){
+      outputVid.style.display="none"; outputVid.pause();
+      vidCtrl.style.display="none";
+      outputImg.style.display="block";
+      outputImg.src = URL.createObjectURL(blob);
+      status("処理済み静止画を表示中");
+    }
+    function showVideo(blob){
+      outputImg.style.display="none";
+      outputVid.style.display="block";
+      outputVid.src = URL.createObjectURL(blob);
+      outputVid.load();
+      vidCtrl.style.display="flex";
+      status("処理済み動画を受信。再生できます");
+    }
+    /********* カスタム動画コントロール *********/
+    playBtn.onclick = ()=> outputVid.play();
+    stopBtn.onclick = ()=> { outputVid.pause(); outputVid.currentTime=0; };
+    loopBtn.onclick = ()=> {
+      outputVid.loop = !outputVid.loop;
+      loopBtn.textContent = "ループ: "+(outputVid.loop?"はい":"いいえ");
+    };
+
+    /********* 動画サイズ取得 *********/
+    function getVideoSize(){
+      const vSet = localStream.getVideoTracks()[0].getSettings();
+      return [vSet.width||640, vSet.height||480];
+    }
   </script>
 </body>
 </html>
