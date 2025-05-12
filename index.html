@@ -1,127 +1,120 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-  <meta charset="UTF-8" />
-  <title>WebRTC DataChannel Video Streaming</title>
+  <meta charset="UTF-8">
+  <title>WebRTC DataChannel でリアルタイム動画送信デモ</title>
+  <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
   <style>
-    body { font-family: sans-serif; max-width: 800px; margin: auto; }
-    video { width: 100%; background: #000; margin-bottom: 1em; }
-    textarea { width: 100%; height: 5em; }
-    button { margin: .5em 0; padding: .5em 1em; }
+    body { font-family: sans-serif; text-align: center; padding: 0; margin: 0; }
+    video { width: 45%; background: #000; margin: 5px; }
+    #controls { margin: 10px; }
+    #log { white-space: pre-wrap; background: #eee; padding: 5px; height: 100px; overflow-y: auto; font-size: 0.9em; text-align: left; }
   </style>
 </head>
 <body>
-  <h1>WebRTC DataChannel Video Streaming</h1>
+  <h1>リアルタイム動画送信 via DataChannel</h1>
+  <div id="controls">
+    <label>自分のID: <span id="myId">—</span></label><br>
+    <input type="text" id="targetId" placeholder="相手のIDを入力">
+    <button id="connectBtn">接続</button>
+  </div>
+  <div>
+    <video id="localVideo" autoplay muted playsinline></video>
+    <video id="remoteVideo" autoplay playsinline></video>
+  </div>
+  <h3>ログ</h3>
+  <div id="log">[INFO] Ready</div>
 
-  <h2>ローカルプレビュー</h2>
-  <video id="localVideo" autoplay muted playsinline></video>
+<script>
+  const logDiv = document.getElementById('log');
+  function log(msg){
+    console.log(msg);
+    logDiv.textContent += '\n' + msg;
+  }
 
-  <h2>相手プレビュー</h2>
-  <video id="remoteVideo" autoplay playsinline controls></video>
+  // PeerJS 初期化
+  const peer = new Peer();
+  let dataConn = null, recorder = null;
 
-  <h3>シグナリング</h3>
-  <p>１．「Create Offer」を押して Offer SDP を生成し、下欄テキストを相手に送信します。</p>
-  <textarea id="offer" placeholder="Offer SDP will appear here"></textarea>
-  <button id="createOffer">Create Offer</button>
+  peer.on('open', id => {
+    document.getElementById('myId').textContent = id;
+    log(`[INFO] 自分のID: ${id}`);
+  });
+  peer.on('error', err => log(`[ERROR] PeerJS: ${err}`));
 
-  <p>２．相手から返ってきた Answer SDP を下欄にペーストし、「Set Answer」を押します。</p>
-  <textarea id="answer" placeholder="Paste Answer SDP here"></textarea>
-  <button id="setAnswer">Set Answer</button>
-
-  <script>
-    const pc = new RTCPeerConnection({
-      iceServers: [ { urls: 'stun:stun.l.google.com:19302' } ]
-    });
-    let dc, mediaRecorder;
-    const localVideo = document.getElementById('localVideo');
-    const remoteVideo = document.getElementById('remoteVideo');
-    const offerTextarea = document.getElementById('offer');
-    const answerTextarea = document.getElementById('answer');
-
-    // --- 1. 映像取得＆MediaRecorder 起動 ---
-    async function startCapture() {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-      localVideo.srcObject = stream;
-      startRecording(stream);
-    }
-    startCapture();
-
-    function startRecording(stream) {
-      // VP8/Opus コンテナで小さめのチャンクを定期生成
-      mediaRecorder = new MediaRecorder(stream, {
-        mimeType: 'video/webm; codecs=vp8,opus'
-      });
-      mediaRecorder.ondataavailable = e => {
-        if (e.data.size > 0 && dc && dc.readyState === 'open') {
-          // Blob をそのまま送信（binaryType=arraybuffer）
-          e.data.arrayBuffer().then(buffer => dc.send(buffer));
-        }
-      };
-      // 200ms ごとにチャンクを生成
-      mediaRecorder.start(200);
-    }
-
-    // --- 2. DataChannel のセットアップ ---
-    function setupDataChannel(channel) {
-      dc = channel;
-      dc.binaryType = 'arraybuffer';
-      dc.onopen = () => console.log('DataChannel open');
-      dc.onmessage = e => {
-        appendToBuffer(new Uint8Array(e.data));
-      };
-    }
-
-    // 呼び側が Offer を作る
-    document.getElementById('createOffer').onclick = async () => {
-      const channel = pc.createDataChannel('video');
-      setupDataChannel(channel);
-
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      offerTextarea.value = JSON.stringify(pc.localDescription);
-    };
-
-    // 受け側が DataChannel を受け取る
-    pc.ondatachannel = event => {
-      setupDataChannel(event.channel);
-    };
-
-    // Offer/Answer の流し込み
-    document.getElementById('setAnswer').onclick = async () => {
-      const answer = JSON.parse(answerTextarea.value);
-      await pc.setRemoteDescription(answer);
-    };
-
-    // ICE candidate は本番ではシグナリング経由で送受信してください
-    pc.onicecandidate = e => {
-      if (e.candidate) {
-        console.log('New ICE candidate:', e.candidate);
+  // メディア取得＆MediaRecorderセットアップ
+  async function startCaptureAndRecord(){
+    const stream = await navigator.mediaDevices.getUserMedia({ video:true, audio:true });
+    document.getElementById('localVideo').srcObject = stream;
+    // VP8/WebM がサポートされている前提
+    recorder = new MediaRecorder(stream, { mimeType: 'video/webm; codecs=vp8' });
+    recorder.ondataavailable = e => {
+      if (e.data && e.data.size > 0 && dataConn && dataConn.open) {
+        dataConn.send(e.data);
       }
     };
+    // 100ms ごとにチャンクを生成
+    recorder.start(100);
+    log('[INFO] 録画開始 (100ms チャンク)');
+  }
 
-    // --- 3. MediaSource Extensions で再生 ---
-    const mediaSource = new MediaSource();
-    let sourceBuffer;
-    const queue = [];
-    remoteVideo.src = URL.createObjectURL(mediaSource);
+  // リモート再生用 MSE セットアップ
+  const remoteVideo = document.getElementById('remoteVideo');
+  const mediaSource = new MediaSource();
+  remoteVideo.src = URL.createObjectURL(mediaSource);
+  let sourceBuffer;
+  mediaSource.addEventListener('sourceopen', () => {
+    sourceBuffer = mediaSource.addSourceBuffer('video/webm; codecs="vp8"');
+    // バッファが空くまでキューしておいて append する
+    sourceBuffer.mode = 'sequence';
+    log('[INFO] MediaSource & SourceBuffer ready');
+  });
 
-    mediaSource.addEventListener('sourceopen', () => {
-      sourceBuffer = mediaSource.addSourceBuffer('video/webm; codecs="vp8,opus"');
-      sourceBuffer.mode = 'segments';
-      sourceBuffer.addEventListener('updateend', () => {
-        if (queue.length > 0 && !sourceBuffer.updating) {
-          sourceBuffer.appendBuffer(queue.shift());
+  // データ受信ハンドラ
+  function setupDataHandlers(conn){
+    conn.on('data', blob => {
+      // Blob -> ArrayBuffer -> appendBuffer
+      const reader = new FileReader();
+      reader.onload = () => {
+        const buf = reader.result;
+        if (!sourceBuffer.updating) {
+          sourceBuffer.appendBuffer(new Uint8Array(buf));
+        } else {
+          sourceBuffer.addEventListener('updateend', function f(){
+            sourceBuffer.removeEventListener('updateend', f);
+            sourceBuffer.appendBuffer(new Uint8Array(buf));
+          });
         }
-      });
+      };
+      reader.readAsArrayBuffer(blob);
     });
+    conn.on('open', () => {
+      log('[INFO] DataChannel open');
+      startCaptureAndRecord();
+    });
+    conn.on('close', () => log('[INFO] DataChannel closed'));
+    conn.on('error', err => log(`[ERROR] DataChannel: ${err}`));
+  }
 
-    function appendToBuffer(chunk) {
-      if (sourceBuffer && !sourceBuffer.updating) {
-        sourceBuffer.appendBuffer(chunk);
-      } else {
-        queue.push(chunk);
-      }
+  // 接続ボタン
+  document.getElementById('connectBtn').onclick = () => {
+    const target = document.getElementById('targetId').value.trim();
+    if (!target) {
+      log('[ERROR] 相手のIDを入力してください');
+      return;
     }
-  </script>
+    log(`[INFO] ${target} に接続を試みます...`);
+    dataConn = peer.connect(target, { reliable: true });
+    setupDataHandlers(dataConn);
+    // 併せて着信側の映像通話がある場合は受信も可能ですが今回は DataChannel のみ
+  };
+
+  // 着信側のデータチャネル受付
+  peer.on('connection', conn => {
+    dataConn = conn;
+    log(`[INFO] DataChannel 着信 from ${conn.peer}`);
+    setupDataHandlers(conn);
+  });
+</script>
 </body>
 </html>
