@@ -1,92 +1,123 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-  <meta charset="UTF-8">
-  <title>P2P Lossless Video via DataChannel</title>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>P2P Video Stream</title>
   <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
   <style>
-    video, img {
-      width: 480px;
-      height: auto;
-      border: 1px solid #ccc;
-      margin: 5px;
-    }
+    body { font-family: sans-serif; text-align: center; margin: 0; padding: 20px; }
+    #roleSelection, #senderUI, #receiverUI { margin-top: 20px; }
+    video { width: 80%; max-width: 600px; background: #000; margin-top: 10px; }
+    input, button { padding: 8px 12px; font-size: 1rem; }
   </style>
 </head>
 <body>
-  <h2>ローカル映像 (カメラ映像)</h2>
-  <video id="localVideo" autoplay muted playsinline></video>
-  <h2>リモート映像 (PNG 連続表示)</h2>
-  <img id="remoteImage" src="" alt="Remote frame">
+  <h1>P2P Video Stream (WebRTC + PeerJS)</h1>
+
+  <!-- Role Selection -->
+  <div id="roleSelection">
+    <button id="senderBtn">送信側 (Sender)</button>
+    <button id="receiverBtn">受信側 (Receiver)</button>
+  </div>
+
+  <!-- Sender UI -->
+  <div id="senderUI" style="display:none;">
+    <p>あなたのID (Your Peer ID): <strong id="my-id">—</strong></p>
+    <video id="localVideo" autoplay muted playsinline></video>
+  </div>
+
+  <!-- Receiver UI -->
+  <div id="receiverUI" style="display:none;">
+    <input type="text" id="remoteId" placeholder="送信側のIDを入力" />
+    <button id="connectBtn">接続 (Connect)</button>
+    <video id="remoteVideo" autoplay playsinline></video>
+  </div>
+
   <script>
-    // — PeerJS オブジェクト生成 — 
-    const peer = new Peer();  // オプションで Peer ID を指定可
-    peer.on('open', myId => {
-      console.log('My peer ID:', myId);
-      // 相手の Peer ID を自分で入力 or URL パラメータから取得するなどして…
-      const remoteId = prompt('相手の Peer ID を入力してください');
-      connectTo(remoteId);
-    });
+    let peer = null;
+    let localStream = null;
 
-    let conn;     // DataChannel 用接続
-    let sendLoop; // フレーム送信用インターバル識別子
+    // DOM elements
+    const roleSelection = document.getElementById('roleSelection');
+    const senderUI       = document.getElementById('senderUI');
+    const receiverUI     = document.getElementById('receiverUI');
+    const senderBtn      = document.getElementById('senderBtn');
+    const receiverBtn    = document.getElementById('receiverBtn');
+    const myIdElem       = document.getElementById('my-id');
+    const localVideo     = document.getElementById('localVideo');
+    const remoteVideo    = document.getElementById('remoteVideo');
+    const remoteIdInput  = document.getElementById('remoteId');
+    const connectBtn     = document.getElementById('connectBtn');
 
-    // — カメラ映像取得 & 接続後の処理 — 
-    async function connectTo(remoteId) {
+    // 送信側を選択
+    senderBtn.onclick = async () => {
+      roleSelection.style.display = 'none';
+      senderUI.style.display = 'block';
+
+      // PeerJS の初期化
+      peer = new Peer();
+      peer.on('open', id => {
+        myIdElem.textContent = id;
+      });
+
       // カメラ映像を取得
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-      const localVideo = document.getElementById('localVideo');
-      localVideo.srcObject = stream;
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        localVideo.srcObject = localStream;
+      } catch(err) {
+        alert('カメラにアクセスできませんでした: ' + err);
+        console.error(err);
+      }
 
-      // DataChannel 接続を開始
-      conn = peer.connect(remoteId, { reliable: true });
-      conn.on('open', () => {
-        console.log('DataChannel open');
-        startSendingFrames(localVideo);
+      // 受信リクエストを待つ
+      peer.on('call', call => {
+        // 受信者からのストリーム要求に対し、ローカル映像を返す
+        call.answer(localStream);
+      });
+    };
+
+    // 受信側を選択
+    receiverBtn.onclick = () => {
+      roleSelection.style.display = 'none';
+      receiverUI.style.display = 'block';
+
+      // PeerJS の初期化
+      peer = new Peer();
+      peer.on('error', err => console.error(err));
+
+      // フロー：接続ボタンクリックで発信
+      connectBtn.onclick = () => {
+        const remoteId = remoteIdInput.value.trim();
+        if (!remoteId) {
+          alert('送信側のIDを入力してください');
+          return;
+        }
+
+        // カメラ不要なら undefined を第1引数に
+        const call = peer.call(remoteId, null);
+        
+        // ストリーム受信時にビデオにセット
+        call.on('stream', stream => {
+          remoteVideo.srcObject = stream;
+        });
+
+        call.on('error', err => console.error(err));
+      };
+
+      // 受信側の Peer ID（必要な場合にログ出力）
+      peer.on('open', id => {
+        console.log('Receiver Peer ID:', id);
       });
 
-      // 相手から送られてくるバイナリデータ (PNG) を受信して表示
-      conn.on('data', data => {
-        // ArrayBuffer → Blob → URL にして img 要素にセット
-        const blob = new Blob([data], { type: 'image/png' });
-        document.getElementById('remoteImage').src = URL.createObjectURL(blob);
+      // 通話の着信ハンドラ
+      peer.on('call', call => {
+        // 送信側が null ストリームで発信したとき、自分で getUserMedia して answer 引数に渡す
+        navigator.mediaDevices.getUserMedia({ video: false, audio: false })
+          .then(emptyStream => call.answer(emptyStream))
+          .catch(err => console.warn('空ストリーム用の getUserMedia に失敗:', err));
       });
-    }
-
-    // — canvas に描画して PNG で送信 — 
-    function startSendingFrames(videoEl) {
-      const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d');
-      // カメラ映像の解像度に合わせる
-      const trackSettings = videoEl.srcObject.getVideoTracks()[0].getSettings();
-      canvas.width = trackSettings.width || 640;
-      canvas.height = trackSettings.height || 480;
-
-      const FPS = 2; // 1秒あたりの送信フレーム数（必要に応じて調整）
-      sendLoop = setInterval(() => {
-        ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
-        canvas.toBlob(blob => {
-          if (!blob || conn.open === false) return;
-          blob.arrayBuffer().then(buffer => conn.send(buffer));
-        }, 'image/png');
-      }, 1000 / FPS);
-    }
-
-    // — 相手からコネクション来た場合のハンドリング — 
-    peer.on('connection', incoming => {
-      // 双方向で送受信したい場合はここで同様に startSendingFrames を呼び出しても OK
-      incoming.on('data', data => {
-        const blob = new Blob([data], { type: 'image/png' });
-        document.getElementById('remoteImage').src = URL.createObjectURL(blob);
-      });
-    });
-
-    // ページ閉じるときにクリーンアップ
-    window.addEventListener('beforeunload', () => {
-      if (sendLoop) clearInterval(sendLoop);
-      if (conn) conn.close();
-      peer.destroy();
-    });
+    };
   </script>
 </body>
 </html>
