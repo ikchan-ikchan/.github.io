@@ -2,168 +2,176 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8" />
-  <title>P2P 録画ビデオ送信デモ</title>
+  <title>P2P Video File Transfer</title>
   <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
   <style>
     body { font-family: sans-serif; text-align: center; padding: 20px; }
-    video { width: 80%; max-width: 720px; background: #000; margin: 10px auto; display: block; }
-    button, input { font-size: 1rem; padding: 8px; margin: 5px; }
-    #controls { margin-top: 20px; }
-    #log { font-size: 0.9rem; color: #555; white-space: pre-wrap; text-align: left; max-height: 150px; overflow-y: auto; background: #f7f7f7; padding: 10px; }
+    button { margin: 8px; padding: 8px 16px; font-size: 1rem; }
+    video { display: block; margin: 12px auto; max-width: 90%; }
+    #status { display: block; margin-top: 8px; font-weight: bold; }
   </style>
 </head>
 <body>
-  <h1>P2P 録画ビデオ送信デモ</h1>
-  <p>あなたのID: <span id="myId">―</span></p>
+  <h1>P2P Video File Transfer</h1>
 
+  <!-- 送信側 UI -->
   <div id="senderUI" style="display:none;">
-    <video id="localVideo" autoplay muted></video>
-    <div id="controls">
-      <button id="startRecBtn">録画開始</button>
-      <button id="stopRecBtn" disabled>録画停止＆送信</button><br/>
-      <input type="text" id="targetId" placeholder="受信側IDを入力" />
-      <button id="connectBtn">接続</button>
-    </div>
+    <button id="startCamBtn">カメラ開始</button>
+    <button id="recordBtn" disabled>録画開始</button>
+    <span id="status"></span>
+    <video id="localVideo" autoplay muted playsinline style="display:none;"></video>
   </div>
 
-  <div id="receiverUI" style="display:none;">
-    <video id="recvVideo" controls autoplay></video>
-    <div id="log">[INFO] 待機中…</div>
+  <!-- 受信側 UI -->
+  <div id="computeUI" style="display:none;">
+    <p>受信側: 映像を待機中...</p>
+    <video id="recvVideo" controls autoplay playsinline></video>
   </div>
 
-<script>
-  // 役割判定
-  const params    = new URLSearchParams(location.search);
-  const isSender  = params.get('role') === 'compute';
+  <script>
+    // URLパラメータでモード判定
+    const params   = new URLSearchParams(window.location.search);
+    const isCompute = params.get('role') === 'compute';
 
-  // 要素
-  const myIdSpan     = document.getElementById('myId');
-  const senderUI     = document.getElementById('senderUI');
-  const receiverUI   = document.getElementById('receiverUI');
-  const localVideo   = document.getElementById('localVideo');
-  const recvVideo    = document.getElementById('recvVideo');
-  const logDiv       = document.getElementById('log');
-  const startRecBtn  = document.getElementById('startRecBtn');
-  const stopRecBtn   = document.getElementById('stopRecBtn');
-  const connectBtn   = document.getElementById('connectBtn');
-  const targetInput  = document.getElementById('targetId');
+    // UI要素
+    const senderUI  = document.getElementById('senderUI');
+    const computeUI = document.getElementById('computeUI');
+    const startCamBtn = document.getElementById('startCamBtn');
+    const recordBtn   = document.getElementById('recordBtn');
+    const statusSpan  = document.getElementById('status');
+    const localVideo  = document.getElementById('localVideo');
+    const recvVideo   = document.getElementById('recvVideo');
 
-  // PeerJS 初期化
-  const peer = new Peer();
-  let conn, mediaRecorder, recordedChunks = [];
+    // PeerJS 初期化（ID を固定）
+    const peerId     = isCompute ? 'compute' : 'sender';
+    const peer       = new Peer(peerId);
+    let conn;
 
-  peer.on('open', id => {
-    myIdSpan.textContent = id;
-    if (isSender) {
-      senderUI.style.display   = 'block';
-      initSender();
+    // モードに応じて UI 表示
+    if (isCompute) {
+      computeUI.style.display = 'block';
     } else {
-      receiverUI.style.display = 'block';
-      initReceiver();
+      senderUI.style.display  = 'block';
     }
-  });
 
-  // ログ表示
-  function log(msg) {
-    if (logDiv) logDiv.textContent += `\n${msg}`;
-    else console.log(msg);
-  }
+    // PeerJS オープン時
+    peer.on('open', id => {
+      console.log(`Peer open: ${id}`);
+      if (!isCompute) {
+        // 送信側は受信側に接続
+        conn = peer.connect('compute');
+        conn.on('open', () => console.log('DataConn open'));
+      }
+    });
 
-  // --- 送信側の初期化 ---
-  function initSender() {
-    // カメラ映像を事前に取得してプレビュー
-    navigator.mediaDevices.getUserMedia({ video: { width:1920, height:1080 }, audio: true })
-      .then(stream => {
-        localVideo.srcObject = stream;
-        mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm; codecs=vp9' });
-        mediaRecorder.ondataavailable = e => recordedChunks.push(e.data);
-        mediaRecorder.onstop = () => sendRecorded();
-      })
-      .catch(err => alert('カメラ取得失敗: ' + err));
+    // コネクション受信時（受信側）
+    peer.on('connection', connection => {
+      conn = connection;
+      if (isCompute) setupReceiver();
+    });
 
-    // 接続ボタン
-    connectBtn.onclick = () => {
-      const targetId = targetInput.value.trim();
-      if (!targetId) return alert('受信側IDを入力してください');
-      conn = peer.connect(targetId);
-      conn.on('open', () => log('[INFO] DataChannel 接続完了'));
-      conn.on('error', e => log(`[ERROR] ${e}`));
-    };
+    // ─── 送信側の処理 ───
+    if (!isCompute) {
+      let mediaRecorder, chunks = [];
 
-    // 録画開始／停止
-    startRecBtn.onclick = () => {
-      if (!mediaRecorder) return alert('カメラ映像を待機中…');
-      recordedChunks = [];
-      mediaRecorder.start();
-      startRecBtn.disabled = true;
-      stopRecBtn.disabled  = false;
-      log('[INFO] 録画開始');
-    };
-    stopRecBtn.onclick = () => {
-      mediaRecorder.stop();
-      startRecBtn.disabled = false;
-      stopRecBtn.disabled  = true;
-      log('[INFO] 録画停止 → 送信準備中');
-    };
-
-    // 録画データの送信
-    function sendRecorded() {
-      if (!conn || conn.open === false) return alert('先に接続してください');
-      const blob = new Blob(recordedChunks, { type: mediaRecorder.mimeType });
-      const fileSize = blob.size;
-      const fileType = blob.type;
-      const CHUNK_SIZE = 64 * 1024;
-
-      // メタデータ送信
-      conn.send({ fileSize, fileType });
-      // ArrayBuffer化 → チャンク送信
-      const reader = new FileReader();
-      reader.onload = () => {
-        const buffer = reader.result;
-        let offset = 0;
-        while (offset < buffer.byteLength) {
-          const slice = buffer.slice(offset, offset + CHUNK_SIZE);
-          conn.send(slice);
-          offset += CHUNK_SIZE;
-        }
-        log('[INFO] 送信完了');
+      // カメラ開始
+      startCamBtn.onclick = () => {
+        navigator.mediaDevices.getUserMedia({
+          video: { width: 1920, height: 1080 },
+          audio: false
+        })
+        .then(stream => {
+          localVideo.srcObject = stream;
+          localVideo.style.display = 'block';
+          startCamBtn.disabled = true;
+          recordBtn.disabled   = false;
+          // MediaRecorder セットアップ
+          mediaRecorder = new MediaRecorder(stream, {
+            mimeType: 'video/webm; codecs=vp9',
+            videoBitsPerSecond: 5_000_000
+          });
+          mediaRecorder.ondataavailable = e => chunks.push(e.data);
+          mediaRecorder.onstop        = () => sendVideo();
+        })
+        .catch(err => statusSpan.textContent = 'カメラ取得失敗: ' + err.message);
       };
-      reader.readAsArrayBuffer(blob);
+
+      // 録画開始／停止
+      recordBtn.onclick = () => {
+        if (mediaRecorder.state === 'inactive') {
+          chunks = [];
+          mediaRecorder.start();
+          recordBtn.textContent = '録画停止';
+          statusSpan.textContent = '録画中...';
+        } else {
+          mediaRecorder.stop();
+          recordBtn.textContent = '録画開始';
+          statusSpan.textContent = '送信中...';
+        }
+      };
+
+      // 録画後の送信
+      function sendVideo() {
+        const blob = new Blob(chunks, { type: mediaRecorder.mimeType });
+        // メタデータ送信
+        conn.send({ fileSize: blob.size, fileType: blob.type });
+
+        // Blob → ArrayBuffer → チャンク分割送信
+        const reader = new FileReader();
+        reader.onload = () => {
+          const buffer = reader.result;
+          const CHUNK_SIZE = 64 * 1024;  // 64KB
+          let offset = 0;
+
+          function sendChunk() {
+            if (offset < buffer.byteLength) {
+              conn.send(buffer.slice(offset, offset + CHUNK_SIZE));
+              offset += CHUNK_SIZE;
+              // バッファ詰まり防止
+              if (conn.bufferedAmount > CHUNK_SIZE * 8) {
+                conn.on('bufferedamountlow', sendChunk);
+              } else {
+                setTimeout(sendChunk, 0);
+              }
+            } else {
+              statusSpan.textContent = '送信完了';
+            }
+          }
+          sendChunk();
+        };
+        reader.readAsArrayBuffer(blob);
+      }
     }
-  }
 
-  // --- 受信側の初期化 ---
-  function initReceiver() {
-    let expectedSize = 0, receivedBuffers = [], startTime;
+    // ─── 受信側の処理 ───
+    function setupReceiver() {
+      const buffers = [];
+      let expectedSize = 0;
+      let startTime = 0;
 
-    peer.on('connection', c => {
-      conn = c;
-      log('[INFO] DataChannel 接続完了');
       conn.on('data', data => {
-        if (data.fileSize && data.fileType) {
-          // メタデータ受信
+        // メタデータ受信
+        if (data && data.fileSize) {
           expectedSize = data.fileSize;
           startTime    = performance.now();
-          receivedBuffers = [];
-          log(`[INFO] ファイルサイズ: ${expectedSize} bytes`);
-        } else {
-          // 動画チャンク受信
-          receivedBuffers.push(data);
-          const got = receivedBuffers.reduce((sum, b) => sum + b.byteLength, 0);
-          if (got >= expectedSize) {
-            // 完全受信 → Blob結合＋再生
-            const blob = new Blob(receivedBuffers, { type: data.fileType || 'video/webm' });
-            const url  = URL.createObjectURL(blob);
-            recvVideo.src = url;
-            const elapsed = ((performance.now() - startTime)/1000).toFixed(2);
-            log(`[INFO] 受信完了・再生開始 (${elapsed} 秒)`);
-          }
+          console.log('期待サイズ:', expectedSize);
+          return;
+        }
+        // チャンク受信
+        buffers.push(data);
+        const received = buffers.reduce((sum, b) => sum + (b.byteLength || b.size), 0);
+        // 全部受信できたら再生
+        if (expectedSize > 0 && received >= expectedSize) {
+          const videoBlob = buffers[0] instanceof ArrayBuffer
+            ? new Blob(buffers, { type: 'video/webm' })
+            : new Blob(buffers, { type: buffers[0].type });
+          const url = URL.createObjectURL(videoBlob);
+          recvVideo.src = url;
+          const elapsed = ((performance.now() - startTime) / 1000).toFixed(2);
+          console.log(`転送時間: ${elapsed} 秒`);
         }
       });
-    });
-  }
-
-  peer.on('error', err => alert('PeerJS エラー: ' + err));
-</script>
+    }
+  </script>
 </body>
 </html>
