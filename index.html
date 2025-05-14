@@ -104,8 +104,9 @@
 
   let dataConn = null;
   let mediaRecorder = null;
+  let isStopping = false;
 
-  // DataReception
+  // 受信バッファ
   let incomingBuffers = [];
   let incomingType = '';
 
@@ -115,7 +116,6 @@
     logDiv.scrollTop = logDiv.scrollHeight;
   }
 
-  // DataChannel setup
   function setupDataChannel(conn){
     dataConn = conn;
     conn.on('open',  () => log('[INFO] データチャネル開通'));
@@ -123,7 +123,6 @@
     conn.on('data',  handleData);
   }
 
-  // Handle incoming data
   function handleData(d){
     if(d && d.type === 'file-info'){
       incomingBuffers = [];
@@ -144,7 +143,6 @@
     }
   }
 
-  // PeerJS init
   const peer = new Peer();
   peer.on('open', id => {
     myIdSpan.textContent = id;
@@ -153,12 +151,10 @@
   });
   peer.on('error', err => log(`[ERROR] PeerJS: ${err}`));
 
-  // Mode init
   if(isCompute){
     userControls.style.display    = 'none';
     computeControls.style.display = 'block';
 
-    // Ensure device labels by asking permission if needed
     async function getUnityStream(){
       let devs = await navigator.mediaDevices.enumerateDevices();
       let cam = devs.find(d=>d.kind==='videoinput' && d.label.includes('Unity Video Capture'));
@@ -225,7 +221,6 @@
     };
   }
 
-  // Joystick 共通
   function updateState(v){
     const lbl = v < -0.5 ? '上' : v > 0.5 ? '下' : '中心';
     stateDiv.textContent = lbl;
@@ -272,7 +267,6 @@
     }
   }
 
-  // MediaRecorder + timeslice
   function setupRecorder(stream){
     mediaRecorder = new MediaRecorder(stream, {
       mimeType:'video/webm; codecs=vp9',
@@ -280,44 +274,42 @@
     });
     mediaRecorder.ondataavailable = e => {
       if(e.data && e.data.size>0){
-        // 最終チャンクも含めすべて送信
         e.data.arrayBuffer().then(buf=>{
           dataConn.send(buf);
           log('[INFO] チャンク送信: '+buf.byteLength+' bytes');
+          if(isStopping){
+            dataConn.send({ type:'stop' });
+            log('[INFO] stop 送信');
+            isStopping = false;
+          }
         });
       }
     };
     mediaRecorder.onstop = () => {
-      // 録画停止前のデータフラッシュ
-      if(mediaRecorder.state !== 'inactive'){
-        mediaRecorder.requestData();
-      }
-      // 完了マーカー
-      dataConn.send({ type:'stop' });
-      log('[INFO] stop 送信');
+      log('[INFO] 録画停止完了');
     };
   }
 
-  // 録画開始／停止
   recordBtn.onclick = () => {
     if(!mediaRecorder){
       log('[ERROR] 先にカメラ開始してください');
       return;
     }
     if(mediaRecorder.state === 'inactive'){
-      // 1秒ごとにondataavailable
       const sliceMs = 1000;
       dataConn.send({ type:'file-info', fileType: mediaRecorder.mimeType });
       log('[INFO] file-info 送信: '+mediaRecorder.mimeType);
+      isStopping = false;
       mediaRecorder.start(sliceMs);
       recordBtn.textContent = '録画 停止';
       log('[INFO] 録画開始 (slice='+sliceMs+'ms)');
     } else {
-      // 最後の中途半端チャンクも requestData で取得
+      // 最後の不完全チャンクも ondataavailable で送ってから stop marker
+      isStopping = true;
       mediaRecorder.requestData();
       mediaRecorder.stop();
       recordBtn.textContent = '録画 開始';
-      log('[INFO] 録画停止');
+      log('[INFO] 録画停止要求');
     }
   };
 </script>
