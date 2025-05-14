@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8" />
-  <title>WebRTC P2P + ジョイスティック + 双方向録画転送</title>
+  <title>WebRTC P2P + ジョイスティック + 双方向ストリーミング録画</title>
   <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
   <style>
     body { font-family: sans-serif; text-align: center; margin: 0; padding: 0; }
@@ -50,7 +50,7 @@
   </style>
 </head>
 <body>
-  <h1>WebRTC P2P + ジョイスティック + 双方向録画転送</h1>
+  <h1>WebRTC P2P + ジョイスティック + 録画ストリーミング</h1>
 
   <div id="mediaArea">
     <video id="localVideo" autoplay playsinline muted></video>
@@ -64,7 +64,6 @@
   <div id="controls">
     <p>自分のID: <span id="myId">―</span></p>
 
-    <!-- 送信/接続用 UI -->
     <div id="userControls">
       <label>カメラ選択:
         <select id="videoSource"></select>
@@ -74,12 +73,10 @@
       <button id="connectBtn">接続</button>
     </div>
 
-    <!-- 計算ノード用 UI -->
     <div id="computeControls" style="display:none;">
-      <p>計算ノードモード：Unity カメラ取得中…</p>
+      <p>計算ノードモード：Unityカメラ取得中…</p>
     </div>
 
-    <!-- 双方向録画送信用ボタン -->
     <button id="recordBtn">録画 開始</button>
   </div>
 
@@ -87,11 +84,9 @@
   <div id="log">[INFO] ページ読み込み完了</div>
 
 <script>
-  // — 役割判定 —
   const params    = new URLSearchParams(location.search);
   const isCompute = params.get('role') === 'compute';
 
-  // — 要素取得 —
   const localVideo     = document.getElementById('localVideo');
   const remoteVideo    = document.getElementById('remoteVideo');
   const joy            = document.getElementById('joystick');
@@ -107,95 +102,86 @@
   const connectBtn     = document.getElementById('connectBtn');
   const recordBtn      = document.getElementById('recordBtn');
 
-  // — 共通変数 —
   let dataConn = null;
-  let mediaRecorder, recordedChunks = [];
-  let receiveBuffers = [], expectedSize = 0, fileType = '', receiveStart = 0;
+  let mediaRecorder = null;
+  let buffers = [];
+  let fileType = '';
 
-  // — ログ出力 —
   function log(msg){
     console.log(msg);
     logDiv.textContent += '\n' + msg;
     logDiv.scrollTop = logDiv.scrollHeight;
   }
 
-  // — DataChannel セットアップ 共通化 —
+  // DataChannel 共通セットアップ
   function setupDataChannel(conn){
     dataConn = conn;
-    conn.on('open',    () => log('[INFO] データチャネル開通'));
-    conn.on('error',   e  => log(`[ERROR] データチャネル: ${e}`));
-    conn.on('data',    handleData);
+    conn.on('open',  () => log('[INFO] データチャネル開通'));
+    conn.on('error', e => log(`[ERROR] データチャネル: ${e}`));
+    conn.on('data',  handleData);
   }
 
-  // — DataChannel 受信ハンドラ —
+  // 受信データ処理
   function handleData(d){
-    // メタデータ受信
-    if(d.fileSize){
-      receiveBuffers = [];
-      expectedSize   = d.fileSize;
-      fileType       = d.fileType;
-      receiveStart   = performance.now();
-      log(`[INFO] 受信開始: ${expectedSize} bytes`);
+    if(typeof d === 'object' && d.type === 'file-info'){
+      buffers = [];
+      fileType = d.fileType;
+      log('[INFO] ファイル転送開始: ' + fileType);
     }
-    // 動画チャンク受信
     else if(d instanceof ArrayBuffer){
-      receiveBuffers.push(d);
-      const received = receiveBuffers.reduce((sum,b)=>sum + b.byteLength, 0);
-      if(received >= expectedSize){
-        const blob = new Blob(receiveBuffers, { type: fileType });
-        remoteVideo.src = URL.createObjectURL(blob);
-        const sec = ((performance.now() - receiveStart)/1000).toFixed(2);
-        log(`[INFO] 受信完了 (${sec} 秒)`);
-      }
+      buffers.push(d);
+      log('[INFO] チャンク受信: ' + d.byteLength + ' bytes');
     }
-    // ジョイスティック信号
-    else if(d.type === 'joystick'){
+    else if(typeof d === 'object' && d.type === 'stop'){
+      const blob = new Blob(buffers, { type:fileType });
+      remoteVideo.src = URL.createObjectURL(blob);
+      log('[INFO] ファイル転送完了');
+    }
+    else if(typeof d === 'object' && d.type === 'joystick'){
       setKnobPosition(d.value);
     }
   }
 
-  // — PeerJS 初期化 —
+  // PeerJS 初期化
   const peer = new Peer();
   peer.on('open', id => {
     myIdSpan.textContent = id;
     log(`[INFO] PeerJS 接続完了: ${id}`);
-    if(isCompute) log('[INFO] 計算ノードモード 起動完了');
+    if(isCompute) log('[INFO] 計算ノードモード 起動');
   });
   peer.on('error', err => log(`[ERROR] PeerJS: ${err}`));
 
-  // — モード別 初期化 —
+  // モード別設定
   if(isCompute){
-    // 計算ノード側
     userControls.style.display    = 'none';
     computeControls.style.display = 'block';
 
-    // Unity Video Capture を自動検出してカメラ開始
+    // Unity Video Capture 検出→カメラ取得
     navigator.mediaDevices.enumerateDevices()
       .then(devs => {
-        const cam = devs.find(d =>
+        const cam = devs.find(d=>
           d.kind==='videoinput' && d.label.includes('Unity Video Capture')
         );
         if(!cam) throw new Error('Unity Video Capture が見つかりません');
         return navigator.mediaDevices.getUserMedia({
-          video:{ deviceId:{ exact: cam.deviceId }, width:1920, height:1080 },
+          video:{ deviceId:{ exact:cam.deviceId }, width:1920, height:1080 },
           audio:true
         });
       })
       .then(stream => {
         localVideo.srcObject = stream;
-        log(`[INFO] Unityカメラ取得: ${stream.getVideoTracks()[0].label}`);
+        log('[INFO] Unityカメラ取得: ' + stream.getVideoTracks()[0].label);
         setupRecorder(stream);
       })
       .catch(err => log(`[ERROR] カメラ取得失敗: ${err.message}`));
 
-    // 接続されたら DataChannel をセットアップ
+    // 接続待機
     peer.on('connection', conn => {
-      log('[INFO] データチャネル接続検出');
+      log('[INFO] データチャネル 接続検出');
       setupDataChannel(conn);
     });
 
   } else {
-    // ユーザーモード
     computeControls.style.display = 'none';
     userControls.style.display    = 'block';
 
@@ -221,13 +207,13 @@
       })
       .then(stream => {
         localVideo.srcObject = stream;
-        log(`[INFO] カメラ開始: ${stream.getVideoTracks()[0].label}`);
+        log('[INFO] カメラ開始: ' + stream.getVideoTracks()[0].label);
         setupRecorder(stream);
       })
       .catch(err => log(`[ERROR] カメラ取得失敗: ${err.message}`));
     };
 
-    // 指定 ID へ接続
+    // データチャネル接続
     connectBtn.onclick = () => {
       const tgt = targetInput.value.trim();
       if(!tgt){ log('[ERROR] IDを入力してください'); return; }
@@ -236,7 +222,7 @@
     };
   }
 
-  // — ジョイスティック操作（共通） —
+  // ジョイスティック操作（共通）
   function updateState(v){
     const lbl = v < -0.5 ? '上' : v > 0.5 ? '下' : '中心';
     stateDiv.textContent = lbl;
@@ -283,50 +269,47 @@
     }
   }
 
-  // — MediaRecorder & 録画送信 設定（共通） —
+  // MediaRecorder & タイムスライスによる逐次送信
   function setupRecorder(stream){
     mediaRecorder = new MediaRecorder(stream, {
       mimeType:'video/webm; codecs=vp9',
       videoBitsPerSecond: 5_000_000
     });
     mediaRecorder.ondataavailable = e => {
-      if(e.data && e.data.size > 0) recordedChunks.push(e.data);
+      if(e.data && e.data.size > 0){
+        // Blob を ArrayBuffer に変換して送信
+        e.data.arrayBuffer().then(buffer => {
+          dataConn.send(buffer);
+          log('[INFO] チャンク送信: ' + buffer.byteLength + ' bytes');
+        });
+      }
     };
     mediaRecorder.onstop = () => {
-      const blob = new Blob(recordedChunks, { type: mediaRecorder.mimeType });
-      recordedChunks = [];
-      // メタデータ送信
-      dataConn.send({ fileSize: blob.size, fileType: blob.type });
-      log(`[INFO] メタデータ送信: ${blob.size} bytes`);
-      // チャンク分割して送信
-      const reader = new FileReader();
-      reader.onload = () => {
-        const buffer = reader.result;
-        const CHUNK = 64 * 1024;
-        for(let offset=0; offset < buffer.byteLength; offset += CHUNK){
-          dataConn.send(buffer.slice(offset, offset + CHUNK));
-        }
-        log('[INFO] 動画データ送信完了');
-      };
-      reader.readAsArrayBuffer(blob);
+      dataConn.send({ type:'stop' });
+      log('[INFO] 録画停止 → stop 送信');
     };
   }
 
-  // — 録画開始／停止 ボタン制御 —
+  // 録画開始／停止ボタン
   recordBtn.onclick = () => {
     if(!mediaRecorder){
       log('[ERROR] 先にカメラ開始してください');
       return;
     }
     if(mediaRecorder.state === 'inactive'){
-      recordedChunks = [];
-      mediaRecorder.start();
+      // タイムスライス（ここでは1秒ごと）
+      const sliceMs = 1000;
+      // ファイル開始情報を送信
+      dataConn.send({ type:'file-info', fileType: mediaRecorder.mimeType });
+      log('[INFO] file-info 送信: ' + mediaRecorder.mimeType);
+      buffers = [];
+      mediaRecorder.start(sliceMs);
       recordBtn.textContent = '録画 停止';
-      log('[INFO] 録画開始');
+      log('[INFO] 録画開始 (slice: ' + sliceMs + 'ms)');
     } else {
       mediaRecorder.stop();
       recordBtn.textContent = '録画 開始';
-      log('[INFO] 録画停止 → 送信中…');
+      log('[INFO] 録画停止');
     }
   };
 </script>
