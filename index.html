@@ -54,7 +54,8 @@
 
   <div id="mediaArea">
     <video id="localVideo" autoplay playsinline muted></video>
-    <video id="remoteVideo" autoplay playsinline controls></video>
+    <!-- muted を追加 -->
+    <video id="remoteVideo" autoplay playsinline controls muted></video>
     <div id="joystick"><div id="knob"></div></div>
   </div>
   <div id="joystickState">中心</div>
@@ -121,21 +122,25 @@
 
   let recvBuffers = [];
   function handleData(d){
-    if (typeof d === 'object' && d.type === 'file-info') {
+    if(d.type === 'file-info'){
       recvBuffers = [];
       fileType = d.fileType;
       log('[INFO] ファイル転送開始: ' + fileType);
     }
-    else if (d instanceof ArrayBuffer) {
+    else if(d instanceof ArrayBuffer){
       recvBuffers.push(d);
       log('[INFO] チャンク受信: ' + d.byteLength + ' bytes');
     }
-    else if (typeof d === 'object' && d.type === 'stop') {
+    else if(d.type === 'stop'){
+      // Blob化して表示
       const blob = new Blob(recvBuffers, { type: fileType });
-      remoteVideo.src = URL.createObjectURL(blob);
-      log('[INFO] ファイル転送完了');
+      const url  = URL.createObjectURL(blob);
+      remoteVideo.src = url;
+      remoteVideo.load();             // データを読み込んで
+      remoteVideo.play().catch(e=>{});// 自動再生を試みる
+      log('[INFO] ファイル転送完了 & 再生開始');
     }
-    else if (typeof d === 'object' && d.type === 'joystick') {
+    else if(d.type === 'joystick'){
       setKnobPosition(d.value);
     }
   }
@@ -144,167 +149,158 @@
   peer.on('open', id => {
     myIdSpan.textContent = id;
     log(`[INFO] PeerJS 接続完了: ${id}`);
-    if (isCompute) log('[INFO] 計算ノードモード 起動');
+    if(isCompute) log('[INFO] 計算ノードモード 起動');
   });
   peer.on('error', err => log(`[ERROR] PeerJS: ${err}`));
 
-  if (isCompute) {
+  if(isCompute){
     userControls.style.display    = 'none';
     computeControls.style.display = 'block';
 
-    // ── ダミー許可取得 → デバイスラベル有効化 ──
-    navigator.mediaDevices.getUserMedia({ video: true, audio: false })
-      .then(tempStream => {
-        tempStream.getTracks().forEach(t => t.stop());
-        log('[INFO] カメラ許可取得完了 → デバイスラベル取得準備OK');
+    // ダミー許可取得 → ラベル有効化
+    navigator.mediaDevices.getUserMedia({ video:true, audio:false })
+      .then(s=>{
+        s.getTracks().forEach(t=>t.stop());
         return navigator.mediaDevices.enumerateDevices();
       })
-      .then(devs => {
-        const cam = devs.find(d =>
-          d.kind === 'videoinput' &&
+      .then(devs=>{
+        const cam = devs.find(d=>
+          d.kind==='videoinput' &&
           d.label.includes('Unity Video Capture')
         );
-        if (!cam) throw new Error('Unity Video Capture が見つかりません');
-        log(`[INFO] 「${cam.label}」を選択します`);
+        if(!cam) throw new Error('Unity Video Capture が見つかりません');
         return navigator.mediaDevices.getUserMedia({
-          video: { deviceId: { exact: cam.deviceId }, width: 1920, height: 1080 },
-          audio: true
+          video:{ deviceId:{ exact: cam.deviceId }, width:1920, height:1080 },
+          audio:true
         });
       })
-      .then(stream => {
+      .then(stream=>{
         localVideo.srcObject = stream;
-        log(`[INFO] Unityカメラ取得: ${stream.getVideoTracks()[0].label}`);
+        log('[INFO] Unityカメラ取得: ' + stream.getVideoTracks()[0].label);
         setupRecorder(stream);
       })
-      .catch(err => log(`[ERROR] カメラ取得失敗: ${err.message}`));
+      .catch(err=> log(`[ERROR] カメラ取得失敗: ${err.message}`));
 
-    peer.on('connection', conn => {
+    peer.on('connection', conn=>{
       log('[INFO] データチャネル接続検出');
       setupDataChannel(conn);
     });
-
   } else {
     computeControls.style.display = 'none';
     userControls.style.display    = 'block';
 
     navigator.mediaDevices.enumerateDevices()
-      .then(devs => {
-        devs.filter(d => d.kind === 'videoinput').forEach(d => {
+      .then(devs=>{
+        devs.filter(d=>d.kind==='videoinput').forEach(d=>{
           const o = document.createElement('option');
           o.value = d.deviceId;
           o.text  = d.label || d.deviceId;
           videoSelect.appendChild(o);
         });
-        if (!videoSelect.options.length) log('[WARN] カメラがありません');
       });
 
-    startCamBtn.onclick = () => {
+    startCamBtn.onclick = ()=>{
       const id = videoSelect.value;
-      if (!id) { log('[ERROR] カメラ未選択'); return; }
+      if(!id) return log('[ERROR] カメラ未選択');
       navigator.mediaDevices.getUserMedia({
-        video: { deviceId: { exact: id }, width: 1920, height: 1080 },
-        audio: true
+        video:{ deviceId:{ exact:id }, width:1920, height:1080 },
+        audio:true
       })
-      .then(stream => {
+      .then(stream=>{
         localVideo.srcObject = stream;
         log('[INFO] カメラ開始: ' + stream.getVideoTracks()[0].label);
         setupRecorder(stream);
       })
-      .catch(err => log(`[ERROR] カメラ取得失敗: ${err.message}`));
+      .catch(err=> log(`[ERROR] カメラ取得失敗: ${err.message}`));
     };
 
-    connectBtn.onclick = () => {
+    connectBtn.onclick = ()=>{
       const tgt = targetInput.value.trim();
-      if (!tgt) { log('[ERROR] IDを入力してください'); return; }
+      if(!tgt) return log('[ERROR] IDを入力してください');
       const conn = peer.connect(tgt);
       setupDataChannel(conn);
     };
   }
 
   function updateState(v){
-    const lbl = v < -0.5 ? '上' : v > 0.5 ? '下' : '中心';
+    const lbl = v<-0.5?'上':v>0.5?'下':'中心';
     stateDiv.textContent = lbl;
-    if (!isCompute && dataConn && dataConn.open) {
-      dataConn.send({ type: 'joystick', value: v });
+    if(!isCompute && dataConn && dataConn.open){
+      dataConn.send({ type:'joystick', value:v });
     }
   }
   function setKnobPosition(v){
     const rect = joy.getBoundingClientRect();
     const maxY = rect.height/2 - knob.offsetHeight/2;
-    const y = Math.max(-maxY, Math.min(maxY, v * maxY));
+    const y = Math.max(-maxY, Math.min(maxY, v*maxY));
     knob.style.transition = 'transform 0.15s';
-    knob.style.transform  = `translate(-50%, calc(-50% + ${y}px))`;
-    stateDiv.textContent = v < -0.5 ? '上' : v > 0.5 ? '下' : '中心';
-    setTimeout(() => knob.style.transition = '', 160);
+    knob.style.transform  = `translate(-50%, calc(-50%+${y}px))`;
+    stateDiv.textContent = v<-0.5?'上':v>0.5?'下':'中心';
+    setTimeout(()=>knob.style.transition='',160);
   }
-  if (!isCompute) {
-    let dragging = false, rect, maxY;
-    joy.addEventListener('pointerdown', e => {
-      e.preventDefault(); dragging = true;
-      rect = joy.getBoundingClientRect();
-      maxY = rect.height/2 - knob.offsetHeight/2;
+  if(!isCompute){
+    let dragging=false, rect, maxY;
+    joy.addEventListener('pointerdown',e=>{
+      e.preventDefault(); dragging=true;
+      rect=joy.getBoundingClientRect();
+      maxY=rect.height/2 - knob.offsetHeight/2;
       joy.setPointerCapture(e.pointerId);
       moveAndUpdate(e.clientY);
-    }, { passive: false });
-    joy.addEventListener('pointermove', e => {
-      if (dragging) { e.preventDefault(); moveAndUpdate(e.clientY); }
-    }, { passive: false });
-    joy.addEventListener('pointerup', e => {
-      e.preventDefault(); dragging = false; resetKnob();
-    }, { passive: false });
+    });
+    joy.addEventListener('pointermove',e=>{
+      if(dragging){ e.preventDefault(); moveAndUpdate(e.clientY); }
+    });
+    joy.addEventListener('pointerup',e=>{
+      e.preventDefault(); dragging=false; resetKnob();
+    });
     function moveAndUpdate(cy){
-      let y = cy - (rect.top + rect.height/2);
-      y = Math.max(-maxY, Math.min(maxY, y));
-      knob.style.transition = ''; knob.style.transform = `translate(-50%, calc(-50% + ${y}px))`;
-      updateState(y / maxY);
+      let y=cy-(rect.top+rect.height/2);
+      y=Math.max(-maxY,Math.min(maxY,y));
+      knob.style.transition=''; knob.style.transform=`translate(-50%,calc(-50%+${y}px))`;
+      updateState(y/maxY);
     }
     function resetKnob(){
-      knob.style.transition = 'transform 0.15s';
-      knob.style.transform = 'translate(-50%, -50%)';
+      knob.style.transition='transform 0.15s';
+      knob.style.transform='translate(-50%,-50%)';
       updateState(0);
-      setTimeout(() => knob.style.transition = '', 160);
+      setTimeout(()=>knob.style.transition='',160);
     }
   }
 
   function setupRecorder(stream){
     mediaRecorder = new MediaRecorder(stream, {
-      mimeType: 'video/webm; codecs=vp9',
-      videoBitsPerSecond: 5_000_000
+      mimeType:'video/webm; codecs=vp9',
+      videoBitsPerSecond:5_000_000
     });
-    mediaRecorder.ondataavailable = e => {
-      if (e.data && e.data.size > 0) {
-        e.data.arrayBuffer().then(buffer => {
+    mediaRecorder.ondataavailable = e=>{
+      if(e.data && e.data.size>0){
+        e.data.arrayBuffer().then(buffer=>{
           dataConn.send(buffer);
-          log('[INFO] チャンク送信: ' + buffer.byteLength + ' bytes');
+          log('[INFO] チャンク送信:'+buffer.byteLength+' bytes');
         });
       }
     };
-    mediaRecorder.onstop = () => {
-      // 中途半端チャンクも吐き出す
+    mediaRecorder.onstop = ()=>{
       mediaRecorder.requestData();
-      setTimeout(() => {
-        dataConn.send({ type: 'stop' });
+      setTimeout(()=>{
+        dataConn.send({ type:'stop' });
         log('[INFO] stop 送信');
-      }, 100);
+      },100);
     };
   }
 
-  recordBtn.onclick = () => {
-    if (!mediaRecorder) {
-      log('[ERROR] 先にカメラ開始してください');
-      return;
-    }
-    const sliceMs = 1000;
-    if (mediaRecorder.state === 'inactive') {
-      dataConn.send({ type: 'file-info', fileType: mediaRecorder.mimeType });
-      log('[INFO] file-info 送信: ' + mediaRecorder.mimeType);
+  recordBtn.onclick = ()=>{
+    if(!mediaRecorder) return log('[ERROR] 先にカメラ開始してください');
+    const sliceMs=1000;
+    if(mediaRecorder.state==='inactive'){
+      dataConn.send({ type:'file-info', fileType:mediaRecorder.mimeType });
+      log('[INFO] file-info 送信:'+mediaRecorder.mimeType);
       mediaRecorder.start(sliceMs);
-      recordBtn.textContent = '録画 停止';
-      log(`[INFO] 録画開始 (slice: ${sliceMs}ms)`);
+      recordBtn.textContent='録画 停止';
     } else {
       mediaRecorder.requestData();
       mediaRecorder.stop();
-      recordBtn.textContent = '録画 開始';
+      recordBtn.textContent='録画 開始';
       log('[INFO] 録画停止要求');
     }
   };
