@@ -123,7 +123,7 @@
   // 受信データ処理
   let recvBuffers = [];
   function handleData(d){
-    if (typeof d === 'object' && d.type === 'file-info') {
+    if (d && d.type === 'file-info') {
       recvBuffers = [];
       fileType = d.fileType;
       log('[INFO] ファイル転送開始: ' + fileType);
@@ -132,12 +132,12 @@
       recvBuffers.push(d);
       log('[INFO] チャンク受信: ' + d.byteLength + ' bytes');
     }
-    else if (typeof d === 'object' && d.type === 'stop') {
+    else if (d && d.type === 'stop') {
       const blob = new Blob(recvBuffers, { type: fileType });
       remoteVideo.src = URL.createObjectURL(blob);
       log('[INFO] ファイル転送完了');
     }
-    else if (typeof d === 'object' && d.type === 'joystick') {
+    else if (d && d.type === 'joystick') {
       setKnobPosition(d.value);
     }
   }
@@ -156,15 +156,21 @@
     userControls.style.display    = 'none';
     computeControls.style.display = 'block';
 
-    // Unity Video Capture 検出→カメラ取得
-    navigator.mediaDevices.enumerateDevices()
+    // 1) 一旦許可取得のためデフォルトカメラを開いてすぐ閉じる
+    navigator.mediaDevices.getUserMedia({ video:true, audio:false })
+      .then(tempStream => {
+        tempStream.getTracks().forEach(t => t.stop());
+        // 2) ラベル付きデバイス列挙
+        return navigator.mediaDevices.enumerateDevices();
+      })
       .then(devs => {
         const cam = devs.find(d =>
           d.kind==='videoinput' && d.label.includes('Unity Video Capture')
         );
         if (!cam) throw new Error('Unity Video Capture が見つかりません');
+        // 3) Unity カメラを本番取得
         return navigator.mediaDevices.getUserMedia({
-          video:{ deviceId:{ exact: cam.deviceId }, width:1920, height:1080 },
+          video:{ deviceId:{ exact:cam.deviceId }, width:1920, height:1080 },
           audio:true
         });
       })
@@ -175,7 +181,7 @@
       })
       .catch(err => log(`[ERROR] カメラ取得失敗: ${err.message}`));
 
-    // 接続待機
+    // DataChannel 接続待機
     peer.on('connection', conn => {
       log('[INFO] データチャネル接続検出');
       setupDataChannel(conn);
@@ -202,7 +208,8 @@
       const id = videoSelect.value;
       if (!id) { log('[ERROR] カメラ未選択'); return; }
       navigator.mediaDevices.getUserMedia({
-        video:{ deviceId:{ exact:id }, width:1920, height:1080 }, audio:true
+        video:{ deviceId:{ exact:id }, width:1920, height:1080 },
+        audio:true
       })
       .then(stream => {
         localVideo.srcObject = stream;
@@ -212,7 +219,7 @@
       .catch(err => log(`[ERROR] カメラ取得失敗: ${err.message}`));
     };
 
-    // データチャネル接続
+    // DataChannel 接続
     connectBtn.onclick = () => {
       const tgt = targetInput.value.trim();
       if (!tgt) { log('[ERROR] IDを入力してください'); return; }
@@ -273,7 +280,6 @@
       mimeType:'video/webm; codecs=vp9',
       videoBitsPerSecond: 5_000_000
     });
-    // 1秒ごとに小分けで ondataavailable が呼ばれる
     mediaRecorder.ondataavailable = e => {
       if (e.data && e.data.size > 0) {
         e.data.arrayBuffer().then(buffer => {
@@ -283,11 +289,8 @@
       }
     };
     mediaRecorder.onstop = () => {
-      // 停止時に必ず最後の中途半端チャンクを取得してから「stop」マーカーを送信
-      if (mediaRecorder.state !== 'inactive') {
-        mediaRecorder.requestData();
-      }
-      // 少しだけ遅延をおいて stop マーカー
+      // 停止前に必ず中途半端チャンクを取得
+      mediaRecorder.requestData();
       setTimeout(()=>{
         dataConn.send({ type:'stop' });
         log('[INFO] stop 送信');
@@ -295,13 +298,13 @@
     };
   }
 
-  // 録画開始／停止ボタン制御
+  // 録画開始／停止 ボタン
   recordBtn.onclick = () => {
     if (!mediaRecorder) {
       log('[ERROR] 先にカメラ開始してください');
       return;
     }
-    const sliceMs = 1000; // 1秒ごと
+    const sliceMs = 1000;
     if (mediaRecorder.state === 'inactive') {
       dataConn.send({ type:'file-info', fileType: mediaRecorder.mimeType });
       log('[INFO] file-info 送信: ' + mediaRecorder.mimeType);
@@ -309,7 +312,6 @@
       recordBtn.textContent = '録画 停止';
       log(`[INFO] 録画開始 (slice: ${sliceMs}ms)`);
     } else {
-      // 停止前に中途半端な分も必ず取得
       mediaRecorder.requestData();
       mediaRecorder.stop();
       recordBtn.textContent = '録画 開始';
