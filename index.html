@@ -102,13 +102,11 @@
   const connectBtn     = document.getElementById('connectBtn');
   const recordBtn      = document.getElementById('recordBtn');
 
-  let dataConn = null;
+  let dataConn      = null;
   let mediaRecorder = null;
-  let isStopping = false;
 
-  // 受信バッファ
   let incomingBuffers = [];
-  let incomingType = '';
+  let incomingType    = '';
 
   function log(msg){
     console.log(msg);
@@ -116,6 +114,7 @@
     logDiv.scrollTop = logDiv.scrollHeight;
   }
 
+  // — DataChannel セットアップ —
   function setupDataChannel(conn){
     dataConn = conn;
     conn.on('open',  () => log('[INFO] データチャネル開通'));
@@ -123,10 +122,11 @@
     conn.on('data',  handleData);
   }
 
+  // — DataChannel 受信処理 —
   function handleData(d){
     if(d && d.type === 'file-info'){
       incomingBuffers = [];
-      incomingType = d.fileType;
+      incomingType    = d.fileType;
       log('[INFO] ファイル転送開始: ' + incomingType);
     }
     else if(d instanceof ArrayBuffer){
@@ -143,6 +143,7 @@
     }
   }
 
+  // — PeerJS 初期化 —
   const peer = new Peer();
   peer.on('open', id => {
     myIdSpan.textContent = id;
@@ -151,18 +152,16 @@
   });
   peer.on('error', err => log(`[ERROR] PeerJS: ${err}`));
 
+  // — モード別 初期化 —
   if(isCompute){
     userControls.style.display    = 'none';
     computeControls.style.display = 'block';
 
+    // 最初に許可をもらってラベル取得 → Unity Virtual Camera 特定
     async function getUnityStream(){
-      let devs = await navigator.mediaDevices.enumerateDevices();
-      let cam = devs.find(d=>d.kind==='videoinput' && d.label.includes('Unity Video Capture'));
-      if(!cam){
-        await navigator.mediaDevices.getUserMedia({ video:true });
-        devs = await navigator.mediaDevices.enumerateDevices();
-        cam = devs.find(d=>d.kind==='videoinput' && d.label.includes('Unity Video Capture'));
-      }
+      await navigator.mediaDevices.getUserMedia({ video:true, audio:false });
+      const devs = await navigator.mediaDevices.enumerateDevices();
+      const cam = devs.find(d=>d.kind==='videoinput'&&d.label.includes('Unity Video Capture'));
       if(!cam) throw new Error('Unity Virtual Camera が見つかりません');
       return navigator.mediaDevices.getUserMedia({
         video:{ deviceId:{ exact: cam.deviceId }, width:1920, height:1080 },
@@ -221,6 +220,7 @@
     };
   }
 
+  // — ジョイスティック操作（共通） —
   function updateState(v){
     const lbl = v < -0.5 ? '上' : v > 0.5 ? '下' : '中心';
     stateDiv.textContent = lbl;
@@ -245,13 +245,13 @@
       maxY = rect.height/2 - knob.offsetHeight/2;
       joy.setPointerCapture(e.pointerId);
       moveAndUpdate(e.clientY);
-    }, {passive:false});
+    }, { passive:false });
     joy.addEventListener('pointermove', e=>{
       if(dragging){ e.preventDefault(); moveAndUpdate(e.clientY); }
-    }, {passive:false});
+    }, { passive:false });
     joy.addEventListener('pointerup', e=>{
       e.preventDefault(); dragging=false; resetKnob();
-    }, {passive:false});
+    }, { passive:false });
     function moveAndUpdate(cy){
       let y = cy - (rect.top + rect.height/2);
       y = Math.max(-maxY, Math.min(maxY, y));
@@ -267,6 +267,7 @@
     }
   }
 
+  // — MediaRecorder + タイムスライス + 追加チャンク —
   function setupRecorder(stream){
     mediaRecorder = new MediaRecorder(stream, {
       mimeType:'video/webm; codecs=vp9',
@@ -276,40 +277,43 @@
       if(e.data && e.data.size>0){
         e.data.arrayBuffer().then(buf=>{
           dataConn.send(buf);
-          log('[INFO] チャンク送信: '+buf.byteLength+' bytes');
-          if(isStopping){
-            dataConn.send({ type:'stop' });
-            log('[INFO] stop 送信');
-            isStopping = false;
-          }
+          log('[INFO] チャンク送信: ' + buf.byteLength + ' bytes');
         });
       }
     };
     mediaRecorder.onstop = () => {
-      log('[INFO] 録画停止完了');
+      // stop前にもう一度 flush
+      mediaRecorder.requestData();
+      // 完了マーカー
+      dataConn.send({ type:'stop' });
+      log('[INFO] stop 送信');
     };
   }
 
+  // — 録画開始／停止 + 追加チャンク —
   recordBtn.onclick = () => {
     if(!mediaRecorder){
       log('[ERROR] 先にカメラ開始してください');
       return;
     }
+    const sliceMs = 1000;
     if(mediaRecorder.state === 'inactive'){
-      const sliceMs = 1000;
+      // ファイル情報送信
       dataConn.send({ type:'file-info', fileType: mediaRecorder.mimeType });
-      log('[INFO] file-info 送信: '+mediaRecorder.mimeType);
-      isStopping = false;
+      log('[INFO] file-info 送信: ' + mediaRecorder.mimeType);
+      // 開始
       mediaRecorder.start(sliceMs);
-      recordBtn.textContent = '録画 停止';
-      log('[INFO] 録画開始 (slice='+sliceMs+'ms)');
-    } else {
-      // 最後の不完全チャンクも ondataavailable で送ってから stop marker
-      isStopping = true;
+      // 即 flush で追加チャンク
       mediaRecorder.requestData();
+      log('[INFO] 録画開始 + 追加チャンク requestData()');
+      recordBtn.textContent = '録画 停止';
+    } else {
+      // stop前 flush
+      mediaRecorder.requestData();
+      log('[INFO] 録画停止前 追加チャンク requestData()');
       mediaRecorder.stop();
       recordBtn.textContent = '録画 開始';
-      log('[INFO] 録画停止要求');
+      log('[INFO] 録画停止');
     }
   };
 </script>
