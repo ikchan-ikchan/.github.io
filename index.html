@@ -6,19 +6,19 @@
   <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
   <style>
     body { font-family:sans-serif; text-align:center; margin:0; padding:0; }
+    #mediaAreaWrapper { position: relative; }
     #mediaArea { display:grid; grid-gap:10px; padding:10px; }
     #localVideo,#remoteVideo{ width:100%; height:auto; background:#000; }
     #remotePngImg {
       position: absolute;
-      right: 20px; bottom: 20px;
-      width: 200px; height: auto;
-      border: 2px solid #222; border-radius: 8px;
-      background: #fff;
-      z-index: 20;
+      left: 0; top: 0;
+      width: 100%; height: 100%;
+      object-fit: contain;
+      z-index: 10;
       display: none;
       pointer-events: none;
+      background: #fff;
     }
-    #mediaAreaWrapper { position: relative; }
     #joystick{ box-sizing:border-box; width:60px; height:240px; margin:auto;
                position:relative; border:4px solid #000; border-radius:30px;
                background:#fff; touch-action:none; overscroll-behavior:contain; }
@@ -52,10 +52,12 @@
 <div id="mediaAreaWrapper">
   <div id="mediaArea">
     <video id="localVideo" autoplay playsinline muted></video>
-    <video id="remoteVideo" autoplay playsinline controls></video>
+    <div style="position:relative; width:100%; height:100%;">
+      <video id="remoteVideo" autoplay playsinline controls></video>
+      <img id="remotePngImg" />
+    </div>
     <div id="joystick"><div id="knob"></div></div>
   </div>
-  <img id="remotePngImg" />
 </div>
 <div id="joystickState">中心</div>
 <hr/>
@@ -151,20 +153,36 @@ function handleData(d) {
     setKnobPosition(d.value);
   }
   if (typeof d === 'object' && d.type === 'png') {
-    // Blob から画像データ生成
+    // 画像をremoteVideoと完全に重ねて表示
     const blob = new Blob([d.data], {type:'image/png'});
     const url = URL.createObjectURL(blob);
-    remotePngImg.src = url;
-    remotePngImg.style.display = 'block';
-    setTimeout(() => {
-      remotePngImg.style.display = 'none';
-      URL.revokeObjectURL(url);
-    }, 4000); // 4秒間表示
+    showPngOverRemote(url);
     log('[INFO] PNG画像受信・表示');
   }
 }
 
-// === ジョイスティック操作（全モード共通） ===
+// === PNGをremoteVideoと同じ位置・大きさに重ねて表示 ===
+function showPngOverRemote(imgUrl) {
+  // remoteVideoの位置・大きさを取得してimgに反映
+  const videoRect = remoteVideo.getBoundingClientRect();
+  const containerRect = remoteVideo.parentElement.getBoundingClientRect();
+
+  // CSSで親divの大きさ100%にしてあるので単純に表示でOK
+  remotePngImg.src = imgUrl;
+  remotePngImg.style.display = 'block';
+  // 完全に重ねる
+  remotePngImg.style.position = 'absolute';
+  remotePngImg.style.left = remoteVideo.offsetLeft + "px";
+  remotePngImg.style.top = remoteVideo.offsetTop + "px";
+  remotePngImg.style.width = remoteVideo.offsetWidth + "px";
+  remotePngImg.style.height = remoteVideo.offsetHeight + "px";
+  setTimeout(() => {
+    remotePngImg.style.display = 'none';
+    URL.revokeObjectURL(imgUrl);
+  }, 4000);
+}
+
+// === ジョイスティック操作 ===
 let lastJoyState = 0;
 let lastPngSent  = false;
 function setKnobPosition(v) {
