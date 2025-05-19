@@ -2,12 +2,13 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8" />
-  <title>WebRTC P2P + ジョイスティック + 双方向録画ストリーミング（双方ジョイスティック制御）</title>
+  <title>WebRTC P2P + ジョイスティック + PNG送信（ジョイスティック上操作）</title>
   <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
   <style>
     body { font-family:sans-serif; text-align:center; margin:0; padding:0; }
     #mediaArea { display:grid; grid-gap:10px; padding:10px; }
     #localVideo,#remoteVideo{ width:100%; height:auto; background:#000; }
+    #remoteImage { display:block; margin:0 auto 10px; max-width:100%; max-height:320px; }
     #joystick{ box-sizing:border-box; width:60px; height:240px; margin:auto;
                position:relative; border:4px solid #000; border-radius:30px;
                background:#fff; touch-action:none; overscroll-behavior:contain; }
@@ -20,27 +21,29 @@
     #log{ white-space:pre-wrap; background:#f7f7f7; padding:8px; margin:8px;
           text-align:left; height:120px; overflow-y:auto; font-size:.9em; }
     @media (orientation:portrait){
-      #mediaArea{ grid-template-columns:1fr auto; grid-template-rows:auto auto;
-        grid-template-areas:"localVideo joystick" "remoteVideo joystick";
+      #mediaArea{ grid-template-columns:1fr auto; grid-template-rows:auto auto auto;
+        grid-template-areas:"localVideo joystick" "remoteVideo joystick" "remoteImage joystick";
         align-items:center; height:calc(100vh - 200px); }
       #localVideo{grid-area:localVideo;} #remoteVideo{grid-area:remoteVideo;}
-      #joystick{grid-area:joystick;}
+      #joystick{grid-area:joystick;} #remoteImage{grid-area:remoteImage;}
     }
     @media (orientation:landscape){
-      #mediaArea{ grid-template-columns:1fr auto 1fr; grid-template-rows:auto;
-        grid-template-areas:"localVideo joystick remoteVideo";
-        align-items:center; height:calc(100vh - 200px); }
+      #mediaArea{ grid-template-columns:1fr auto 1fr; grid-template-rows:auto auto;
+        grid-template-areas:"localVideo joystick remoteVideo"
+                            "localVideo joystick remoteImage";
+        align-items:center; height:calc(100vh - 200px);}
       #localVideo{grid-area:localVideo;} #remoteVideo{grid-area:remoteVideo;}
-      #joystick{grid-area:joystick;}
+      #joystick{grid-area:joystick;} #remoteImage{grid-area:remoteImage;}
     }
   </style>
 </head>
 <body>
-<h1>WebRTC P2P + ジョイスティック + 双方向録画ストリーミング（双方ジョイスティック制御）</h1>
+<h1>WebRTC P2P + ジョイスティック + PNG送信（ジョイスティック上操作）</h1>
 
 <div id="mediaArea">
   <video id="localVideo" autoplay playsinline muted></video>
   <video id="remoteVideo" autoplay playsinline controls></video>
+  <img id="remoteImage" alt="受信PNG" />
   <div id="joystick"><div id="knob"></div></div>
 </div>
 <div id="joystickState">中心</div>
@@ -48,16 +51,12 @@
 
 <div id="controls">
   <p>自分のID: <span id="myId">―</span></p>
-
-  <!-- ユーザー側 UI -->
   <div id="userControls">
     <label>カメラ選択: <select id="videoSource"></select></label>
     <button id="startCamera">カメラ開始</button>
     <input type="text" id="targetId" placeholder="相手のIDを入力" />
     <button id="connectBtn">接続</button>
   </div>
-
-  <!-- 計算ノード側 UI -->
   <div id="computeControls" style="display:none;">
     <p id="computeMsg">計算ノードモード：Unity カメラ検出中…</p>
     <div id="fallbackUI" style="display:none;">
@@ -67,21 +66,18 @@
     </div>
   </div>
 </div>
-
 <h3>ログ</h3>
 <div id="log">[INFO] ページ読み込み完了</div>
-
 <script>
-// === 共通ユーティリティ ===
 const $        = id => document.getElementById(id);
 const log      = m => { console.log(m); $('log').textContent += '\n' + m;
                         $('log').scrollTop = $('log').scrollHeight; };
 const params   = new URLSearchParams(location.search);
 const isCompute= params.get('role') === 'compute';
 
-// === DOM 要素 ===
 const localVideo      = $('localVideo');
 const remoteVideo     = $('remoteVideo');
+const remoteImage     = $('remoteImage');
 const joy             = $('joystick');
 const knob            = $('knob');
 const stateDiv        = $('joystickState');
@@ -94,12 +90,11 @@ const targetInput     = $('targetId');
 const connectBtn      = $('connectBtn');
 let mediaRecorder     = null;
 
-// === PeerJS 初期化 ===
+// === PeerJS ===
 const peer = new Peer();
 peer.on('open', id => { myIdSpan.textContent = id; log('[INFO] Peer open: ' + id); });
 peer.on('error', e    => log('[ERROR] Peer: ' + e));
 
-// === DataChannel セットアップ ===
 let dataConn = null;
 function setupDataChannel(conn) {
   dataConn = conn;
@@ -108,7 +103,7 @@ function setupDataChannel(conn) {
   conn.on('data',  handleData);
 }
 
-// === 受信ロジック ===
+// === 受信ロジック（映像・PNG）===
 let recvBuf = [], recvType = '', idleTimer = null;
 const IDLE_TIMEOUT_MS = 2000;
 function finishReceive() {
@@ -141,10 +136,16 @@ function handleData(d) {
   if (typeof d === 'object' && d.type === 'joystick') {
     setKnobPosition(d.value);
   }
+  if (typeof d === 'object' && d.type === 'png') {
+    // 画像バイナリ受信
+    const blob = new Blob([d.data], { type: "image/png" });
+    remoteImage.src = URL.createObjectURL(blob);
+    log('[INFO] PNG画像受信 ('+ blob.size +' bytes)');
+  }
 }
 
-// === ジョイスティック操作（全モード共通） ===
-let lastJoyState = 0;
+// === ジョイスティック操作（PNG送信/録画制御）===
+let lastJoyValue = 0;
 function setKnobPosition(v) {
   const rect = joy.getBoundingClientRect();
   const maxY = rect.height/2 - knob.offsetHeight/2;
@@ -154,30 +155,44 @@ function setKnobPosition(v) {
   stateDiv.textContent   = v < -0.5 ? '上' : v > 0.5 ? '下' : '中心';
   setTimeout(() => knob.style.transition = '', 160);
 }
-function updateState(v) {
+async function updateState(v) {
   setKnobPosition(v);
 
-  // ジョイスティック位置を相手へ送信（どちらの役割でも）
+  // 相手へジョイスティック状態送信
   if (dataConn && dataConn.open) {
     dataConn.send({ type: 'joystick', value: v });
   }
 
   // 録画制御（下げて録画、戻して停止）
   if (mediaRecorder && dataConn && dataConn.open) {
-    // 下げたときに録画開始（すでに録画中なら何もしない）
     if (v > 0.5 && mediaRecorder.state === 'inactive') {
       mediaRecorder.start(1000);
       log('[INFO] 録画開始 (ジョイスティック)');
-    }
-    // 戻したときに録画停止（すでに停止なら何もしない）
-    else if (Math.abs(v) <= 0.5 && mediaRecorder.state === 'recording') {
+    } else if (Math.abs(v) <= 0.5 && mediaRecorder.state === 'recording') {
       mediaRecorder.stop();
       log('[INFO] 録画停止 (ジョイスティック)');
     }
   }
-  lastJoyState = v;
+
+  // PNG送信（ジョイスティック上側：中心から-0.5を超えて上がった時のみ1回だけ）
+  if (lastJoyValue > -0.5 && v <= -0.5) {
+    if (localVideo.srcObject) {
+      // 動画の1フレームをcanvas経由でpng変換
+      const canvas = document.createElement("canvas");
+      canvas.width  = localVideo.videoWidth  || 640;
+      canvas.height = localVideo.videoHeight || 480;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(localVideo, 0, 0, canvas.width, canvas.height);
+      canvas.toBlob(async (blob) => {
+        if (!blob) return;
+        const arrayBuf = await blob.arrayBuffer();
+        dataConn && dataConn.send({ type: "png", data: arrayBuf });
+        log("[INFO] PNG画像送信 (" + blob.size + " bytes)");
+      }, "image/png");
+    }
+  }
+  lastJoyValue = v;
 }
-// --- 操作イベント（全モードで有効） ---
 let dragging = false, rect, maxY;
 joy.addEventListener('pointerdown', e => {
   e.preventDefault();
@@ -196,7 +211,6 @@ joy.addEventListener('pointermove', e => {
 joy.addEventListener('pointerup', e => {
   e.preventDefault();
   dragging = false;
-  // 完全センターに戻す
   knob.style.transition = 'transform .15s';
   knob.style.transform  = 'translate(-50%,-50%)';
   setTimeout(() => knob.style.transition = '', 160);
@@ -227,9 +241,7 @@ function setupRecorder(stream) {
       log('[INFO] 送信 ' + buf.byteLength + ' bytes');
     }
   };
-  mediaRecorder.onstop = () => {
-    log('[INFO] MediaRecorder stopped');
-  };
+  mediaRecorder.onstop = () => { log('[INFO] MediaRecorder stopped'); };
 }
 
 // === ユーザーモード初期化 ===
@@ -244,7 +256,6 @@ if (!isCompute) {
           videoSelect.appendChild(o);
         });
   });
-
   startCamBtn.onclick = () => {
     const id = videoSelect.value;
     if (!id) { log('[ERROR] カメラ未選択'); return; }
@@ -259,7 +270,6 @@ if (!isCompute) {
     })
     .catch(err => log('[ERROR] getUserMedia: ' + err.message));
   };
-
   connectBtn.onclick = () => {
     const tgt = targetInput.value.trim();
     if (!tgt) { log('[ERROR] IDを入力してください'); return; }
@@ -288,7 +298,6 @@ if (isCompute) {
       });
     });
   }
-
   async function waitUnity(max=6, interval=1500) {
     for (let i = 0; i < max; i++) {
       const devs = await navigator.mediaDevices.enumerateDevices();
@@ -298,7 +307,6 @@ if (isCompute) {
     }
     return null;
   }
-
   async function startComputeCamera(deviceId) {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -314,7 +322,6 @@ if (isCompute) {
       log('[ERROR] Compute getUserMedia: ' + e.message);
     }
   }
-
   ;(async ()=>{
     const cam = await waitUnity();
     if (cam) {
@@ -326,7 +333,6 @@ if (isCompute) {
       fillList();
     }
   })();
-
   navigator.mediaDevices.ondevicechange = async () => {
     if (localVideo.srcObject) return;
     const devs = await navigator.mediaDevices.enumerateDevices();
@@ -336,7 +342,6 @@ if (isCompute) {
       startComputeCamera(cam.deviceId);
     }
   };
-
   retryBtn.onclick = () => {
     fbUI.style.display = 'none';
     computeMsg.textContent = '再検出中…';
@@ -351,9 +356,7 @@ if (isCompute) {
       }
     })();
   };
-
   computeBtn.onclick = () => startComputeCamera(sel.value);
-
   peer.on('connection', conn => {
     log('[INFO] DataChannel 接続');
     setupDataChannel(conn);
