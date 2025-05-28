@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8" />
-  <title>WebRTC P2P + ジョイスティック + 高画質録画送信</title>
+  <title>WebRTC P2P + ジョイスティック + 高画質録画送信（再生保証）</title>
   <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
   <style>
     body { font-family:sans-serif; text-align:center; margin:0; padding:0; }
@@ -36,7 +36,7 @@
   </style>
 </head>
 <body>
-<h1>WebRTC P2P + ジョイスティック + 高画質録画送信</h1>
+<h1>WebRTC P2P + ジョイスティック + 高画質録画送信（再生保証）</h1>
 
 <div id="mediaArea">
   <video id="localVideo" autoplay playsinline muted></video>
@@ -72,14 +72,12 @@
 <div id="log">[INFO] ページ読み込み完了</div>
 
 <script>
-// === 共通ユーティリティ ===
 const $        = id => document.getElementById(id);
 const log      = m => { console.log(m); $('log').textContent += '\n' + m;
                         $('log').scrollTop = $('log').scrollHeight; };
 const params   = new URLSearchParams(location.search);
 const isCompute= params.get('role') === 'compute';
 
-// === DOM 要素 ===
 const localVideo      = $('localVideo');
 const remoteVideo     = $('remoteVideo');
 const joy             = $('joystick');
@@ -94,12 +92,10 @@ const targetInput     = $('targetId');
 const connectBtn      = $('connectBtn');
 let mediaRecorder     = null;
 
-// === PeerJS 初期化 ===
 const peer = new Peer();
 peer.on('open', id => { myIdSpan.textContent = id; log('[INFO] Peer open: ' + id); });
 peer.on('error', e    => log('[ERROR] Peer: ' + e));
 
-// === DataChannel セットアップ ===
 let dataConn = null;
 function setupDataChannel(conn) {
   dataConn = conn;
@@ -108,9 +104,8 @@ function setupDataChannel(conn) {
   conn.on('data',  handleData);
 }
 
-// === 受信ロジック ===
-let recvBuf = [], recvType = '', idleTimer = null;
-const IDLE_TIMEOUT_MS = 2000;
+// "stop"を受けてから確実に再生する（タイムアウトは使わない）
+let recvBuf = [], recvType = '';
 function finishReceive() {
   if (!recvBuf.length) return;
   const blob = new Blob(recvBuf, { type: recvType });
@@ -126,24 +121,25 @@ function finishReceive() {
   recvType = '';
 }
 function handleData(d) {
-  if (typeof d === 'object' && d.type === 'file-info') {
+  if(typeof d === 'object' && d.type === 'file-info') {
     recvType = d.fileType;
     recvBuf = [];
     log('[INFO] file-info: ' + recvType);
     return;
   }
-  if (d instanceof ArrayBuffer) {
+  if(d instanceof ArrayBuffer) {
     recvBuf.push(d);
-    clearTimeout(idleTimer);
-    idleTimer = setTimeout(finishReceive, IDLE_TIMEOUT_MS);
     return;
   }
-  if (typeof d === 'object' && d.type === 'joystick') {
+  if(typeof d === 'object' && d.type === 'stop') {
+    finishReceive();
+    return;
+  }
+  if(typeof d === 'object' && d.type === 'joystick') {
     setKnobPosition(d.value);
   }
 }
 
-// === ジョイスティック操作（全モード共通） ===
 let lastJoyState = 0;
 function setKnobPosition(v) {
   const rect = joy.getBoundingClientRect();
@@ -156,20 +152,17 @@ function setKnobPosition(v) {
 }
 function updateState(v) {
   setKnobPosition(v);
-
-  // ジョイスティック位置を相手へ送信（どちらの役割でも）
   if (dataConn && dataConn.open) {
     dataConn.send({ type: 'joystick', value: v });
   }
-
-  // 録画制御（下げて録画、戻して停止）
   if (mediaRecorder && dataConn && dataConn.open) {
     if (v > 0.5 && mediaRecorder.state === 'inactive') {
-      mediaRecorder.start(200); // 200msごとにチャンク
+      mediaRecorder.start(500);
       log('[INFO] 録画開始 (ジョイスティック)');
     }
     else if (Math.abs(v) <= 0.5 && mediaRecorder.state === 'recording') {
       mediaRecorder.stop();
+      dataConn && dataConn.send({type:'stop'});
       log('[INFO] 録画停止 (ジョイスティック)');
     }
   }
@@ -206,14 +199,12 @@ function moveAndUpdate(clientY) {
   updateState(y / maxY);
 }
 
-// === MediaRecorder 準備（高画質＋バッファ監視） ===
 function setupRecorder(stream) {
   mediaRecorder = new MediaRecorder(stream, {
     mimeType: 'video/webm;codecs=vp9',
-    videoBitsPerSecond: 50_000_000 // 50Mbpsで最大画質
+    videoBitsPerSecond: 20_000_000 // 安全な最大
   });
   const MAX_DATA_CHANNEL_BUFFER = 5 * 1024 * 1024; // 5MB
-
   mediaRecorder.onstart = () => {
     dataConn && dataConn.send({ type:'file-info', fileType: mediaRecorder.mimeType });
     log('[INFO] file-info 送信');
@@ -237,7 +228,6 @@ function setupRecorder(stream) {
   };
 }
 
-// === ユーザーモード初期化 ===
 if (!isCompute) {
   computeControls.style.display = 'none';
   navigator.mediaDevices.enumerateDevices().then(devs => {
@@ -272,7 +262,6 @@ if (!isCompute) {
   };
 }
 
-// === 計算ノードモード初期化 ===
 if (isCompute) {
   userControls.style.display = 'none';
   computeControls.style.display = 'block';
