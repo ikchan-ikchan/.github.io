@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8" />
-  <title>WebRTC P2P + ジョイスティック + ビットレート可変</title>
+  <title>WebRTC P2P + ジョイスティック + ビットレート双方向同期</title>
   <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
   <style>
     body { font-family:sans-serif; text-align:center; margin:0; padding:0; }
@@ -38,7 +38,7 @@
   </style>
 </head>
 <body>
-<h1>WebRTC P2P + ジョイスティック + ビットレート可変</h1>
+<h1>WebRTC P2P + ジョイスティック + ビットレート双方向同期</h1>
 
 <div id="mediaArea">
   <video id="localVideo" autoplay playsinline muted></video>
@@ -101,12 +101,26 @@ const bitrateSlider   = $('bitrateSlider');
 const bitrateVal      = $('bitrateVal');
 let mediaRecorder     = null, streamForRecorder = null;
 
+let dataConn = null;
+
+let isUpdatingFromRemote = false; // ← "同期ループ"防止フラグ
+
 // ====== ビットレート値・UI連動 ======
 let currentBitrate = 20000; // kbps（初期値20Mbps）
 
+// スライダー操作時：自分の表示更新＋相手に送信
 bitrateSlider.oninput = function() {
   bitrateVal.textContent = this.value;
   currentBitrate = parseInt(this.value,10);
+  // 他端末にも反映要求（同期ループ回避）
+  if (dataConn && dataConn.open && !isUpdatingFromRemote) {
+    dataConn.send({type:'bitrate', value: currentBitrate});
+  }
+};
+// スライダー確定時：MediaRecorderも即時リセット
+bitrateSlider.onchange = function() {
+  if(streamForRecorder) setupRecorder(streamForRecorder);
+  log('[INFO] 新しいビットレート: ' + currentBitrate + 'kbps でMediaRecorder再セット');
 };
 
 // ====== PeerJS初期化 ======
@@ -114,7 +128,6 @@ const peer = new Peer();
 peer.on('open', id => { myIdSpan.textContent = id; log('[INFO] Peer open: ' + id); });
 peer.on('error', e    => log('[ERROR] Peer: ' + e));
 
-let dataConn = null;
 function setupDataChannel(conn) {
   dataConn = conn;
   conn.on('open',  () => log('[INFO] DataChannel open'));
@@ -138,6 +151,18 @@ function finishReceive() {
   recvType = '';
 }
 function handleData(d) {
+  // 双方向ビットレート同期！
+  if(typeof d === 'object' && d.type === 'bitrate') {
+    isUpdatingFromRemote = true;
+    // 画面上のスライダー/数値を相手の値で即上書き
+    bitrateSlider.value = d.value;
+    bitrateVal.textContent = d.value;
+    currentBitrate = parseInt(d.value,10);
+    if(streamForRecorder) setupRecorder(streamForRecorder);
+    isUpdatingFromRemote = false;
+    log('[INFO] 相手からビットレート同期: ' + d.value + 'kbps');
+    return;
+  }
   if(typeof d === 'object' && d.type === 'file-info') {
     recvType = d.fileType;
     recvBuf = [];
@@ -172,7 +197,6 @@ function updateState(v) {
   if (dataConn && dataConn.open) {
     dataConn.send({ type: 'joystick', value: v });
   }
-  // 録画制御（下げて録画、戻して停止）
   if (mediaRecorder && dataConn && dataConn.open) {
     if (v > 0.5 && mediaRecorder.state === 'inactive') {
       mediaRecorder.start(500);
@@ -219,9 +243,7 @@ function moveAndUpdate(clientY) {
 
 // ========= MediaRecorder（ビットレート可変）========
 function setupRecorder(stream) {
-  // ストリームは再利用する
   streamForRecorder = stream;
-  // 前回のmediaRecorderが録画中なら止める
   if(mediaRecorder && mediaRecorder.state === 'recording'){
     mediaRecorder.stop();
   }
@@ -253,12 +275,7 @@ function setupRecorder(stream) {
   };
 }
 
-// スライダー変更時は再セットアップ
-bitrateSlider.onchange = function() {
-  if(streamForRecorder) setupRecorder(streamForRecorder);
-  log('[INFO] 新しいビットレート: ' + currentBitrate + 'kbps でMediaRecorder再セット');
-};
-
+// --- ユーザーモード（Webカメラ選択）
 if (!isCompute) {
   computeControls.style.display = 'none';
   navigator.mediaDevices.enumerateDevices().then(devs => {
