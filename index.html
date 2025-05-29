@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8" />
-  <title>WebRTC P2P + ジョイスティック + 高画質録画＋PNGキャプチャ送信</title>
+  <title>WebRTC P2P + ジョイスティック + ビットレート可変</title>
   <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
   <style>
     body { font-family:sans-serif; text-align:center; margin:0; padding:0; }
@@ -19,7 +19,8 @@
     #controls select,#controls input,#controls button{ margin:4px; }
     #log{ white-space:pre-wrap; background:#f7f7f7; padding:8px; margin:8px;
           text-align:left; height:120px; overflow-y:auto; font-size:.9em; }
-    #remotePng { max-width: 320px; max-height: 240px; border:1px solid #aaa; margin-top: 10px;}
+    #bitrateBox { margin:8px; }
+    #bitrateSlider { width:200px; vertical-align:middle; }
     @media (orientation:portrait){
       #mediaArea{ grid-template-columns:1fr auto; grid-template-rows:auto auto;
         grid-template-areas:"localVideo joystick" "remoteVideo joystick";
@@ -37,7 +38,7 @@
   </style>
 </head>
 <body>
-<h1>WebRTC P2P + ジョイスティック + 高画質録画＋PNGキャプチャ送信</h1>
+<h1>WebRTC P2P + ジョイスティック + ビットレート可変</h1>
 
 <div id="mediaArea">
   <video id="localVideo" autoplay playsinline muted></video>
@@ -45,7 +46,16 @@
   <div id="joystick"><div id="knob"></div></div>
 </div>
 <div id="joystickState">中心</div>
-<img id="remotePng" alt="受信PNG" style="display:none"/>
+
+<!-- ビットレート調整スライダー -->
+<div id="bitrateBox">
+  <label>
+    画質（ビットレート）:
+    <input type="range" id="bitrateSlider" min="1000" max="50000" step="1000" value="20000">
+    <span id="bitrateVal">20000</span> kbps
+  </label>
+  <span style="font-size:90%">（低←　→高）</span>
+</div>
 
 <hr/>
 <div id="controls">
@@ -87,9 +97,19 @@ const videoSelect     = $('videoSource');
 const startCamBtn     = $('startCamera');
 const targetInput     = $('targetId');
 const connectBtn      = $('connectBtn');
-const remotePng       = $('remotePng');
-let mediaRecorder     = null;
+const bitrateSlider   = $('bitrateSlider');
+const bitrateVal      = $('bitrateVal');
+let mediaRecorder     = null, streamForRecorder = null;
 
+// ====== ビットレート値・UI連動 ======
+let currentBitrate = 20000; // kbps（初期値20Mbps）
+
+bitrateSlider.oninput = function() {
+  bitrateVal.textContent = this.value;
+  currentBitrate = parseInt(this.value,10);
+};
+
+// ====== PeerJS初期化 ======
 const peer = new Peer();
 peer.on('open', id => { myIdSpan.textContent = id; log('[INFO] Peer open: ' + id); });
 peer.on('error', e    => log('[ERROR] Peer: ' + e));
@@ -118,14 +138,6 @@ function finishReceive() {
   recvType = '';
 }
 function handleData(d) {
-  // PNGキャプチャ受信
-  if(typeof d === 'object' && d.type === 'png') {
-    const blob = new Blob([d.data], {type:'image/png'});
-    remotePng.src = URL.createObjectURL(blob);
-    remotePng.style.display = '';
-    log('[INFO] PNG受信');
-    return;
-  }
   if(typeof d === 'object' && d.type === 'file-info') {
     recvType = d.fileType;
     recvBuf = [];
@@ -145,7 +157,6 @@ function handleData(d) {
   }
 }
 
-// ジョイスティック
 let lastJoyState = 0;
 function setKnobPosition(v) {
   const rect = joy.getBoundingClientRect();
@@ -156,35 +167,8 @@ function setKnobPosition(v) {
   stateDiv.textContent   = v < -0.5 ? '上' : v > 0.5 ? '下' : '中心';
   setTimeout(() => knob.style.transition = '', 160);
 }
-
-async function sendCurrentFrameAsPng() {
-  try {
-    if (!localVideo.srcObject) return;
-    // Canvasへビデオ描画
-    const v = localVideo;
-    const w = v.videoWidth  || 640;
-    const h = v.videoHeight || 480;
-    const c = document.createElement('canvas');
-    c.width = w; c.height = h;
-    c.getContext('2d').drawImage(v, 0, 0, w, h);
-    const blob = await new Promise(r => c.toBlob(r, 'image/png'));
-    if (dataConn && dataConn.open && blob) {
-      const buf = await blob.arrayBuffer();
-      dataConn.send({type:'png', data: buf});
-      log('[INFO] PNG送信 (' + buf.byteLength + ' bytes)');
-    }
-  } catch(e) {
-    log('[ERR] PNG送信失敗: ' + e);
-  }
-}
-
-// vの遷移に応じて即時PNG送信する
 function updateState(v) {
   setKnobPosition(v);
-  // PNGキャプチャ送信（上方向に「倒した瞬間」だけ）
-  if (lastJoyState > -0.5 && v < -0.5) {
-    sendCurrentFrameAsPng();
-  }
   if (dataConn && dataConn.open) {
     dataConn.send({ type: 'joystick', value: v });
   }
@@ -233,16 +217,22 @@ function moveAndUpdate(clientY) {
   updateState(y / maxY);
 }
 
-// MediaRecorder（録画）設定
+// ========= MediaRecorder（ビットレート可変）========
 function setupRecorder(stream) {
+  // ストリームは再利用する
+  streamForRecorder = stream;
+  // 前回のmediaRecorderが録画中なら止める
+  if(mediaRecorder && mediaRecorder.state === 'recording'){
+    mediaRecorder.stop();
+  }
   mediaRecorder = new MediaRecorder(stream, {
     mimeType: 'video/webm;codecs=vp9',
-    videoBitsPerSecond: 20_000_000 // 安定
+    videoBitsPerSecond: currentBitrate * 1000 // kbps→bps
   });
   const MAX_DATA_CHANNEL_BUFFER = 5 * 1024 * 1024; // 5MB
   mediaRecorder.onstart = () => {
     dataConn && dataConn.send({ type:'file-info', fileType: mediaRecorder.mimeType });
-    log('[INFO] file-info 送信');
+    log('[INFO] file-info 送信 (bitrate='+currentBitrate+'kbps)');
   };
   mediaRecorder.ondataavailable = async e => {
     if (e.data && e.data.size) {
@@ -262,6 +252,12 @@ function setupRecorder(stream) {
     log('[INFO] MediaRecorder stopped');
   };
 }
+
+// スライダー変更時は再セットアップ
+bitrateSlider.onchange = function() {
+  if(streamForRecorder) setupRecorder(streamForRecorder);
+  log('[INFO] 新しいビットレート: ' + currentBitrate + 'kbps でMediaRecorder再セット');
+};
 
 if (!isCompute) {
   computeControls.style.display = 'none';
