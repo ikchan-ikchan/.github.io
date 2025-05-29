@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8" />
-  <title>WebRTC P2P + ジョイスティック + 動画&PNG自動送信</title>
+  <title>WebRTC P2P + ジョイスティック + 骨格返送デモ</title>
   <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
   <style>
     body { font-family:sans-serif; text-align:center; margin:0; padding:0; }
@@ -21,7 +21,8 @@
           text-align:left; height:120px; overflow-y:auto; font-size:.9em; }
     #bitrateBox { margin:8px; }
     #bitrateSlider { width:200px; vertical-align:middle; }
-    #remotePng { max-width: 320px; max-height: 240px; border:1px solid #aaa; margin-top: 10px;}
+    #remotePng, #skeletonPng { max-width: 320px; max-height: 240px; border:1px solid #aaa; margin-top: 10px;}
+    #skeletonPng { border:2px solid red; }
     @media (orientation:portrait){
       #mediaArea{ grid-template-columns:1fr auto; grid-template-rows:auto auto;
         grid-template-areas:"localVideo joystick" "remoteVideo joystick";
@@ -39,7 +40,7 @@
   </style>
 </head>
 <body>
-<h1>WebRTC P2P + ジョイスティック + 動画&PNG自動送信</h1>
+<h1>WebRTC P2P + ジョイスティック + 骨格返送デモ</h1>
 
 <div id="mediaArea">
   <video id="localVideo" autoplay playsinline muted></video>
@@ -58,6 +59,7 @@
 </div>
 
 <img id="remotePng" alt="受信PNG" style="display:none"/>
+<img id="skeletonPng" alt="骨格推定PNG" style="display:none"/>
 
 <hr/>
 <div id="controls">
@@ -102,13 +104,13 @@ const connectBtn      = $('connectBtn');
 const bitrateSlider   = $('bitrateSlider');
 const bitrateVal      = $('bitrateVal');
 const remotePng       = $('remotePng');
+const skeletonPng     = $('skeletonPng');
 let mediaRecorder     = null, streamForRecorder = null;
 
 let dataConn = null;
-let isUpdatingFromRemote = false; // ビットレート同期ループ防止
+let isUpdatingFromRemote = false;
 let currentBitrate = 20000; // kbps（初期値20Mbps）
 
-// ====== ビットレート同期 ======
 bitrateSlider.oninput = function() {
   bitrateVal.textContent = this.value;
   currentBitrate = parseInt(this.value,10);
@@ -132,12 +134,11 @@ function setupDataChannel(conn) {
   conn.on('data',  handleData);
 }
 
-// ===== PNG送信タイマー・フラグ管理 =====
+// ==== PNG送信タイマー・フラグ管理 ====
 let pngTimer = null;
-let isRecording = false; // 録画中か
+let isRecording = false;
 let lastJoyState = 0;
 
-// ==== PNG送信 ====
 async function sendCurrentFrameAsPng() {
   try {
     if (!localVideo.srcObject) return;
@@ -158,7 +159,6 @@ async function sendCurrentFrameAsPng() {
   }
 }
 
-// ==== ジョイスティック・録画・PNG連動 ====
 function setKnobPosition(v) {
   const rect = joy.getBoundingClientRect();
   const maxY = rect.height/2 - knob.offsetHeight/2;
@@ -173,20 +173,14 @@ function updateState(v) {
   if (dataConn && dataConn.open) {
     dataConn.send({ type: 'joystick', value: v });
   }
-  // ジョイスティックを下げたときだけ録画&PNGタイマー起動
   if (mediaRecorder && dataConn && dataConn.open) {
-    // 録画開始判定（録画中でなければ）
     if (v > 0.5 && !isRecording) {
-      // 1コマ目PNG即送信
       sendCurrentFrameAsPng();
-      // 録画開始
       mediaRecorder.start(500);
       log('[INFO] 録画開始 (ジョイスティック)');
       isRecording = true;
-      // 1秒ごとPNG送信タイマー
       pngTimer = setInterval(sendCurrentFrameAsPng, 1000);
     }
-    // 録画停止判定
     else if (Math.abs(v) <= 0.5 && isRecording) {
       mediaRecorder.stop();
       dataConn && dataConn.send({type:'stop'});
@@ -228,7 +222,6 @@ function moveAndUpdate(clientY) {
   updateState(y / maxY);
 }
 
-// ====== MediaRecorder（ビットレート可変）======
 function setupRecorder(stream) {
   streamForRecorder = stream;
   if(mediaRecorder && mediaRecorder.state === 'recording'){
@@ -236,9 +229,9 @@ function setupRecorder(stream) {
   }
   mediaRecorder = new MediaRecorder(stream, {
     mimeType: 'video/webm;codecs=vp9',
-    videoBitsPerSecond: currentBitrate * 1000 // kbps→bps
+    videoBitsPerSecond: currentBitrate * 1000
   });
-  const MAX_DATA_CHANNEL_BUFFER = 5 * 1024 * 1024; // 5MB
+  const MAX_DATA_CHANNEL_BUFFER = 5 * 1024 * 1024;
   mediaRecorder.onstart = () => {
     dataConn && dataConn.send({ type:'file-info', fileType: mediaRecorder.mimeType });
     log('[INFO] file-info 送信 (bitrate='+currentBitrate+'kbps)');
@@ -264,7 +257,7 @@ function setupRecorder(stream) {
   };
 }
 
-// ====== DataChannel受信処理 ======
+// ==== DataChannel受信処理 ====
 let recvBuf = [], recvType = '';
 function finishReceive() {
   if (!recvBuf.length) return;
@@ -281,6 +274,15 @@ function finishReceive() {
   recvType = '';
 }
 function handleData(d) {
+  // 骨格推定PNG受信
+  if(typeof d === 'object' && d.type === 'processed_png'){
+    const blob = new Blob([d.data], {type:'image/png'});
+    skeletonPng.src = URL.createObjectURL(blob);
+    skeletonPng.style.display = '';
+    log('[INFO] 骨格推定PNG受信');
+    return;
+  }
+  // 通常PNG受信
   if(typeof d === 'object' && d.type === 'png') {
     const blob = new Blob([d.data], {type:'image/png'});
     remotePng.src = URL.createObjectURL(blob);
@@ -314,6 +316,17 @@ function handleData(d) {
   }
   if(typeof d === 'object' && d.type === 'joystick') {
     setKnobPosition(d.value);
+  }
+}
+
+// === 計算側：Pythonからの返送を受け付けるAPI ===
+if(isCompute){
+  window.sendProcessedPng = function(png_b64){
+    if(dataConn && dataConn.open){
+      let bin = Uint8Array.from(atob(png_b64), c=>c.charCodeAt(0));
+      dataConn.send({type:'processed_png', data: bin.buffer});
+      log('[INFO] 骨格推定済みPNGを返送');
+    }
   }
 }
 
