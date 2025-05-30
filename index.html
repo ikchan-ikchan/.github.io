@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8" />
-  <title>WebRTC P2P + ジョイスティック + 骨格返送デモ</title>
+  <title>WebRTC P2P + ジョイスティック + ビットレート双方向同期</title>
   <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
   <style>
     body { font-family:sans-serif; text-align:center; margin:0; padding:0; }
@@ -21,8 +21,6 @@
           text-align:left; height:120px; overflow-y:auto; font-size:.9em; }
     #bitrateBox { margin:8px; }
     #bitrateSlider { width:200px; vertical-align:middle; }
-    #remotePng, #skeletonPng { max-width: 320px; max-height: 240px; border:1px solid #aaa; margin-top: 10px;}
-    #skeletonPng { border:2px solid red; }
     @media (orientation:portrait){
       #mediaArea{ grid-template-columns:1fr auto; grid-template-rows:auto auto;
         grid-template-areas:"localVideo joystick" "remoteVideo joystick";
@@ -40,7 +38,7 @@
   </style>
 </head>
 <body>
-<h1>WebRTC P2P + ジョイスティック + 骨格返送デモ</h1>
+<h1>WebRTC P2P + ジョイスティック + ビットレート双方向同期</h1>
 
 <div id="mediaArea">
   <video id="localVideo" autoplay playsinline muted></video>
@@ -49,6 +47,7 @@
 </div>
 <div id="joystickState">中心</div>
 
+<!-- ビットレート調整スライダー -->
 <div id="bitrateBox">
   <label>
     画質（ビットレート）:
@@ -57,9 +56,6 @@
   </label>
   <span style="font-size:90%">（低←　→高）</span>
 </div>
-
-<img id="remotePng" alt="受信PNG" style="display:none"/>
-<img id="skeletonPng" alt="骨格推定PNG" style="display:none"/>
 
 <hr/>
 <div id="controls">
@@ -103,26 +99,31 @@ const targetInput     = $('targetId');
 const connectBtn      = $('connectBtn');
 const bitrateSlider   = $('bitrateSlider');
 const bitrateVal      = $('bitrateVal');
-const remotePng       = $('remotePng');
-const skeletonPng     = $('skeletonPng');
 let mediaRecorder     = null, streamForRecorder = null;
 
 let dataConn = null;
-let isUpdatingFromRemote = false;
+
+let isUpdatingFromRemote = false; // ← "同期ループ"防止フラグ
+
+// ====== ビットレート値・UI連動 ======
 let currentBitrate = 20000; // kbps（初期値20Mbps）
 
+// スライダー操作時：自分の表示更新＋相手に送信
 bitrateSlider.oninput = function() {
   bitrateVal.textContent = this.value;
   currentBitrate = parseInt(this.value,10);
+  // 他端末にも反映要求（同期ループ回避）
   if (dataConn && dataConn.open && !isUpdatingFromRemote) {
     dataConn.send({type:'bitrate', value: currentBitrate});
   }
 };
+// スライダー確定時：MediaRecorderも即時リセット
 bitrateSlider.onchange = function() {
   if(streamForRecorder) setupRecorder(streamForRecorder);
   log('[INFO] 新しいビットレート: ' + currentBitrate + 'kbps でMediaRecorder再セット');
 };
 
+// ====== PeerJS初期化 ======
 const peer = new Peer();
 peer.on('open', id => { myIdSpan.textContent = id; log('[INFO] Peer open: ' + id); });
 peer.on('error', e    => log('[ERROR] Peer: ' + e));
@@ -134,31 +135,54 @@ function setupDataChannel(conn) {
   conn.on('data',  handleData);
 }
 
-// ==== PNG送信タイマー・フラグ管理 ====
-let pngTimer = null;
-let isRecording = false;
-let lastJoyState = 0;
-
-async function sendCurrentFrameAsPng() {
-  try {
-    if (!localVideo.srcObject) return;
-    const v = localVideo;
-    const w = v.videoWidth  || 640;
-    const h = v.videoHeight || 480;
-    const c = document.createElement('canvas');
-    c.width = w; c.height = h;
-    c.getContext('2d').drawImage(v, 0, 0, w, h);
-    const blob = await new Promise(r => c.toBlob(r, 'image/png'));
-    if (dataConn && dataConn.open && blob) {
-      const buf = await blob.arrayBuffer();
-      dataConn.send({type:'png', data: buf});
-      log('[INFO] PNG送信 (' + buf.byteLength + ' bytes)');
-    }
-  } catch(e) {
-    log('[ERR] PNG送信失敗: ' + e);
+let recvBuf = [], recvType = '';
+function finishReceive() {
+  if (!recvBuf.length) return;
+  const blob = new Blob(recvBuf, { type: recvType });
+  remoteVideo.pause();
+  remoteVideo.srcObject = null;
+  remoteVideo.src = URL.createObjectURL(blob);
+  remoteVideo.muted = true;
+  remoteVideo.play().catch(() => {
+    log('[WARN] 自動再生ブロック: 再生ボタンを押してください');
+  });
+  log('[INFO] 受信完了 (' + blob.size + ' bytes)');
+  recvBuf = [];
+  recvType = '';
+}
+function handleData(d) {
+  // 双方向ビットレート同期！
+  if(typeof d === 'object' && d.type === 'bitrate') {
+    isUpdatingFromRemote = true;
+    // 画面上のスライダー/数値を相手の値で即上書き
+    bitrateSlider.value = d.value;
+    bitrateVal.textContent = d.value;
+    currentBitrate = parseInt(d.value,10);
+    if(streamForRecorder) setupRecorder(streamForRecorder);
+    isUpdatingFromRemote = false;
+    log('[INFO] 相手からビットレート同期: ' + d.value + 'kbps');
+    return;
+  }
+  if(typeof d === 'object' && d.type === 'file-info') {
+    recvType = d.fileType;
+    recvBuf = [];
+    log('[INFO] file-info: ' + recvType);
+    return;
+  }
+  if(d instanceof ArrayBuffer) {
+    recvBuf.push(d);
+    return;
+  }
+  if(typeof d === 'object' && d.type === 'stop') {
+    finishReceive();
+    return;
+  }
+  if(typeof d === 'object' && d.type === 'joystick') {
+    setKnobPosition(d.value);
   }
 }
 
+let lastJoyState = 0;
 function setKnobPosition(v) {
   const rect = joy.getBoundingClientRect();
   const maxY = rect.height/2 - knob.offsetHeight/2;
@@ -174,19 +198,14 @@ function updateState(v) {
     dataConn.send({ type: 'joystick', value: v });
   }
   if (mediaRecorder && dataConn && dataConn.open) {
-    if (v > 0.5 && !isRecording) {
-      sendCurrentFrameAsPng();
+    if (v > 0.5 && mediaRecorder.state === 'inactive') {
       mediaRecorder.start(500);
       log('[INFO] 録画開始 (ジョイスティック)');
-      isRecording = true;
-      pngTimer = setInterval(sendCurrentFrameAsPng, 1000);
     }
-    else if (Math.abs(v) <= 0.5 && isRecording) {
+    else if (Math.abs(v) <= 0.5 && mediaRecorder.state === 'recording') {
       mediaRecorder.stop();
       dataConn && dataConn.send({type:'stop'});
       log('[INFO] 録画停止 (ジョイスティック)');
-      isRecording = false;
-      if (pngTimer) { clearInterval(pngTimer); pngTimer = null; }
     }
   }
   lastJoyState = v;
@@ -222,6 +241,7 @@ function moveAndUpdate(clientY) {
   updateState(y / maxY);
 }
 
+// ========= MediaRecorder（ビットレート可変）========
 function setupRecorder(stream) {
   streamForRecorder = stream;
   if(mediaRecorder && mediaRecorder.state === 'recording'){
@@ -229,9 +249,9 @@ function setupRecorder(stream) {
   }
   mediaRecorder = new MediaRecorder(stream, {
     mimeType: 'video/webm;codecs=vp9',
-    videoBitsPerSecond: currentBitrate * 1000
+    videoBitsPerSecond: currentBitrate * 1000 // kbps→bps
   });
-  const MAX_DATA_CHANNEL_BUFFER = 5 * 1024 * 1024;
+  const MAX_DATA_CHANNEL_BUFFER = 5 * 1024 * 1024; // 5MB
   mediaRecorder.onstart = () => {
     dataConn && dataConn.send({ type:'file-info', fileType: mediaRecorder.mimeType });
     log('[INFO] file-info 送信 (bitrate='+currentBitrate+'kbps)');
@@ -252,85 +272,10 @@ function setupRecorder(stream) {
   };
   mediaRecorder.onstop = () => {
     log('[INFO] MediaRecorder stopped');
-    isRecording = false;
-    if (pngTimer) { clearInterval(pngTimer); pngTimer = null; }
   };
 }
 
-// ==== DataChannel受信処理 ====
-let recvBuf = [], recvType = '';
-function finishReceive() {
-  if (!recvBuf.length) return;
-  const blob = new Blob(recvBuf, { type: recvType });
-  remoteVideo.pause();
-  remoteVideo.srcObject = null;
-  remoteVideo.src = URL.createObjectURL(blob);
-  remoteVideo.muted = true;
-  remoteVideo.play().catch(() => {
-    log('[WARN] 自動再生ブロック: 再生ボタンを押してください');
-  });
-  log('[INFO] 受信完了 (' + blob.size + ' bytes)');
-  recvBuf = [];
-  recvType = '';
-}
-function handleData(d) {
-  // 骨格推定PNG受信
-  if(typeof d === 'object' && d.type === 'processed_png'){
-    const blob = new Blob([d.data], {type:'image/png'});
-    skeletonPng.src = URL.createObjectURL(blob);
-    skeletonPng.style.display = '';
-    log('[INFO] 骨格推定PNG受信');
-    return;
-  }
-  // 通常PNG受信
-  if(typeof d === 'object' && d.type === 'png') {
-    const blob = new Blob([d.data], {type:'image/png'});
-    remotePng.src = URL.createObjectURL(blob);
-    remotePng.style.display = '';
-    log('[INFO] PNG受信');
-    return;
-  }
-  if(typeof d === 'object' && d.type === 'bitrate') {
-    isUpdatingFromRemote = true;
-    bitrateSlider.value = d.value;
-    bitrateVal.textContent = d.value;
-    currentBitrate = parseInt(d.value,10);
-    if(streamForRecorder) setupRecorder(streamForRecorder);
-    isUpdatingFromRemote = false;
-    log('[INFO] 相手からビットレート同期: ' + d.value + 'kbps');
-    return;
-  }
-  if(typeof d === 'object' && d.type === 'file-info') {
-    recvType = d.fileType;
-    recvBuf = [];
-    log('[INFO] file-info: ' + recvType);
-    return;
-  }
-  if(d instanceof ArrayBuffer) {
-    recvBuf.push(d);
-    return;
-  }
-  if(typeof d === 'object' && d.type === 'stop') {
-    finishReceive();
-    return;
-  }
-  if(typeof d === 'object' && d.type === 'joystick') {
-    setKnobPosition(d.value);
-  }
-}
-
-// === 計算側：Pythonからの返送を受け付けるAPI ===
-if(isCompute){
-  window.sendProcessedPng = function(png_b64){
-    if(dataConn && dataConn.open){
-      let bin = Uint8Array.from(atob(png_b64), c=>c.charCodeAt(0));
-      dataConn.send({type:'processed_png', data: bin.buffer});
-      log('[INFO] 骨格推定済みPNGを返送');
-    }
-  }
-}
-
-// --- ユーザーモード
+// --- ユーザーモード（Webカメラ選択）
 if (!isCompute) {
   computeControls.style.display = 'none';
   navigator.mediaDevices.enumerateDevices().then(devs => {
@@ -365,7 +310,6 @@ if (!isCompute) {
   };
 }
 
-// --- 計算側
 if (isCompute) {
   userControls.style.display = 'none';
   computeControls.style.display = 'block';
