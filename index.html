@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8" />
-  <title>WebRTC P2P + ジョイスティック + ビットレート同期 + 骨格PNG中継</title>
+  <title>WebRTC P2P + ジョイスティック + ビットレート同期 + 骨格PNG 中継 (Base64)</title>
   <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
   <style>
     body { font-family:sans-serif; text-align:center; margin:0; padding:0; }
@@ -52,7 +52,7 @@
   </style>
 </head>
 <body>
-  <h1>WebRTC P2P + ジョイスティック + ビットレート同期<br>＋ 骨格PNG 中継</h1>
+  <h1>WebRTC P2P + ジョイスティック + ビットレート同期<br>＋ 骨格PNG 中継 (Base64)</h1>
 
   <div id="mediaArea">
     <video id="localVideo" autoplay playsinline muted></video>
@@ -105,32 +105,32 @@
     const $        = id => document.getElementById(id);
     const log      = m => {
       console.log(m);
-      $('log').textContent += '\\n' + m;
+      $('log').textContent += '\n' + m;
       $('log').scrollTop = $('log').scrollHeight;
     };
     const params   = new URLSearchParams(location.search);
     const isCompute= params.get('role') === 'compute';
 
     // DOM要素
-    const localVideo      = $('localVideo');
-    const remoteVideo     = $('remoteVideo');
-    const joy             = $('joystick');
-    const knob            = $('knob');
-    const stateDiv        = $('joystickState');
-    const myIdSpan        = $('myId');
-    const userControls    = $('userControls');
-    const computeControls = $('computeControls');
-    const videoSelect     = $('videoSource');
-    const startCamBtn     = $('startCamera');
-    const targetInput     = $('targetId');
-    const connectBtn      = $('connectBtn');
-    const bitrateSlider   = $('bitrateSlider');
-    const bitrateVal      = $('bitrateVal');
-    const receivedSkeleton= $('receivedSkeleton');
+    const localVideo       = $('localVideo');
+    const remoteVideo      = $('remoteVideo');
+    const joy              = $('joystick');
+    const knob             = $('knob');
+    const stateDiv         = $('joystickState');
+    const myIdSpan         = $('myId');
+    const userControls     = $('userControls');
+    const computeControls  = $('computeControls');
+    const videoSelect      = $('videoSource');
+    const startCamBtn      = $('startCamera');
+    const targetInput      = $('targetId');
+    const connectBtn       = $('connectBtn');
+    const bitrateSlider    = $('bitrateSlider');
+    const bitrateVal       = $('bitrateVal');
+    const receivedSkeleton = $('receivedSkeleton');
 
-    let mediaRecorder     = null;
-    let streamForRecorder = null;
-    let dataConn          = null;
+    let mediaRecorder      = null;
+    let streamForRecorder  = null;
+    let dataConn           = null;
 
     // 開始ビットレート（kbps）
     let currentBitrate = 20000;
@@ -140,23 +140,21 @@
     // ============================================
     // ビットレートスライダー操作
     // ============================================
-    // スライダーを動かした瞬間：表示更新＋DataChannel送信（相手のUI同期）
     bitrateSlider.oninput = function() {
       bitrateVal.textContent = this.value;
       currentBitrate = parseInt(this.value, 10);
-      // 相手に同期メッセージ
+      // 相手に同期メッセージを送信
       if (dataConn && dataConn.open && !isUpdatingFromRemote) {
         dataConn.send({ type: 'bitrate', value: currentBitrate });
       }
     };
-    // スライダーを離した瞬間：MediaRecorderを再セットアップ
     bitrateSlider.onchange = function() {
       if (streamForRecorder) setupRecorder(streamForRecorder);
-      log('[INFO] ビットレート更新: ' + currentBitrate + ' kbps → MediaRecorder再セット');
+      log('[INFO] ビットレート更新: ' + currentBitrate + ' kbps → MediaRecorder 再セット');
     };
 
     // ============================================
-    // PeerJS初期化・DataChannel処理
+    // PeerJS 初期化
     // ============================================
     const peer = new Peer();
     peer.on('open', id => {
@@ -172,9 +170,9 @@
       conn.on('data', handleData);
     }
 
-    // DataChannel受信処理
+    // DataChannel 受信処理
     function handleData(d) {
-      // 1) ビットレート同期メッセージ
+      // (1) ビットレート同期メッセージ
       if (typeof d === 'object' && d.type === 'bitrate') {
         isUpdatingFromRemote = true;
         bitrateSlider.value = d.value;
@@ -185,9 +183,9 @@
         log('[INFO] 相手からビットレート同期: ' + d.value + ' kbps');
         return;
       }
-      // 2) 録画ビットレート系メッセージ
+
+      // (2) 録画チャンク受信
       if (d instanceof ArrayBuffer) {
-        // 録画チャンク
         recvBuf.push(d);
         return;
       }
@@ -201,17 +199,19 @@
         finishReceive();
         return;
       }
-      // 3) ジョイスティック同期
+
+      // (3) ジョイスティック同期
       if (typeof d === 'object' && d.type === 'joystick') {
         setKnobPosition(d.value);
       }
-      // 4) Python → HTML → JS で WebSocket → DataChannel 経由：骨格PNG
+
+      // (4) 骨格PNG(Base64)受信
       if (typeof d === 'object' && d.type === 'skeleton') {
-        // skeleton.data：ArrayBuffer のバイナリ(PNG)
-        const blob = new Blob([d.data], { type: 'image/png' });
-        receivedSkeleton.src = URL.createObjectURL(blob);
+        // Base64文字列として届いたPNGデータを <img> に表示
+        const base64str = d.data;
+        receivedSkeleton.src = 'data:image/png;base64,' + base64str;
         receivedSkeleton.style.display = '';
-        log('[INFO] 骨格PNG受信');
+        log('[INFO] 骨格PNG(Base64)受信');
         return;
       }
     }
@@ -235,7 +235,7 @@
     }
 
     // ============================================
-    // ジョイスティック操作（録画・PNG取得トリガー含む）
+    // ジョイスティック操作（録画開始/停止含む）
     // ============================================
     let lastJoyState = 0;
     function setKnobPosition(v) {
@@ -250,12 +250,12 @@
     function updateState(v) {
       setKnobPosition(v);
 
-      // 1) ジョイスティック値を相手と同期
+      // (1) ジョイスティック値を相手に送信
       if (dataConn && dataConn.open) {
         dataConn.send({ type: 'joystick', value: v });
       }
 
-      // 2) ジョイスティック下（v > 0.5）→録画開始、戻り（|v| <= 0.5）→録画停止
+      // (2) 録画制御 (下げて録画、戻して停止)
       if (mediaRecorder && dataConn && dataConn.open) {
         if (v > 0.5 && mediaRecorder.state === 'inactive') {
           mediaRecorder.start(500);
@@ -300,7 +300,7 @@
     }
 
     // ============================================
-    // MediaRecorderセットアップ（可変ビットレート）
+    // MediaRecorder セットアップ (ビットレート可変)
     // ============================================
     function setupRecorder(stream) {
       streamForRecorder = stream;
@@ -311,7 +311,7 @@
         mimeType: 'video/webm;codecs=vp9',
         videoBitsPerSecond: currentBitrate * 1000 // kbps → bps
       });
-      const MAX_DATA_CHANNEL_BUFFER = 5 * 1024 * 1024; // 5MB
+      const MAX_DC_BUFFER = 5 * 1024 * 1024; // 5MB
 
       mediaRecorder.onstart = () => {
         dataConn && dataConn.send({ type:'file-info', fileType: mediaRecorder.mimeType });
@@ -321,7 +321,7 @@
         if (e.data && e.data.size) {
           const buf = await e.data.arrayBuffer();
           const trySend = () => {
-            if (dataConn && dataConn.open && dataConn.bufferSize < MAX_DATA_CHANNEL_BUFFER) {
+            if (dataConn && dataConn.open && dataConn.bufferSize < MAX_DC_BUFFER) {
               dataConn.send(buf);
               log('[INFO] 送信 ' + buf.byteLength + ' bytes, buf:' + dataConn.bufferSize);
             } else {
@@ -337,9 +337,8 @@
     }
 
     // ============================================
-    // 計算側HTMLでのWebSocket受信（Python→HTML）
+    // 計算側HTML: WebSocket受信 (Python → HTML)
     // ============================================
-    // Pythonスクリプトが ws://localhost:8765 で骨格PNGを投げてくる想定
     let ws = null;
     if (isCompute) {
       try {
@@ -348,15 +347,28 @@
         ws.onopen = () => log('[INFO] WebSocket 接続成功 (Python側)');
         ws.onerror = err => log('[ERROR] WebSocket: ' + err);
         ws.onmessage = event => {
-          // 送られてくるのは純粋なPNG ArrayBuffer。DataChannelでユーザーへ中継。
-          const pngBuf = event.data;
+          // 受信した ArrayBuffer を Base64 に変換して P2P 中継
+          const arrayBuf = event.data;
+          // Base64 文字列に変換
+          const uint8Arr = new Uint8Array(arrayBuf);
+          let binary = '';
+          for (let i = 0; i < uint8Arr.length; i++) {
+            binary += String.fromCharCode(uint8Arr[i]);
+          }
+          const base64Str = btoa(binary);
+          // (1) 自身の画面にも表示
+          receivedSkeleton.src = 'data:image/png;base64,' + base64Str;
+          receivedSkeleton.style.display = '';
+          log('[INFO] Skeleton PNG(Base64) 受信 (WebSocket)');
+
+          // (2) P2P DataChannel を通じてユーザー側に送信
           if (dataConn && dataConn.open) {
-            dataConn.send({ type: 'skeleton', data: pngBuf });
-            log('[INFO] 骨格PNG中継 (P2P DataChannel)');
+            dataConn.send({ type: 'skeleton', data: base64Str });
+            log('[INFO] Skeleton PNG(Base64) 中継 (DataChannel)');
           }
         };
       } catch (e) {
-        log('[ERROR] WebSocket接続失敗: ' + e);
+        log('[ERROR] WebSocket 接続失敗: ' + e);
       }
     }
 
@@ -370,7 +382,7 @@
             .forEach(d => {
               const o = document.createElement('option');
               o.value = d.deviceId;
-              o.text = d.label || d.deviceId;
+              o.text  = d.label || d.deviceId;
               videoSelect.appendChild(o);
             });
       });
@@ -403,16 +415,16 @@
     if (isCompute) {
       userControls.style.display = 'none';
       computeControls.style.display = 'block';
-      const computeMsg = $('computeMsg');
-      const fbUI       = $('fallbackUI');
-      const sel        = $('computeVideoSel');
-      const retryBtn   = $('retryBtn');
-      const computeBtn = $('computeStartBtn');
+      const computeMsg  = $('computeMsg');
+      const fbUI        = $('fallbackUI');
+      const sel         = $('computeVideoSel');
+      const retryBtn    = $('retryBtn');
+      const computeBtn  = $('computeStartBtn');
 
       function fillList() {
         sel.innerHTML = '';
         navigator.mediaDevices.enumerateDevices().then(devs => {
-          devs.filter(d=>d.kind==='videoinput').forEach(d=>{
+          devs.filter(d => d.kind === 'videoinput').forEach(d => {
             const o = document.createElement('option');
             o.value = d.deviceId;
             o.text  = d.label || d.deviceId;
@@ -422,11 +434,11 @@
       }
 
       async function waitUnity(max=6, interval=1500) {
-        for (let i=0; i<max; i++) {
+        for (let i = 0; i < max; i++) {
           const devs = await navigator.mediaDevices.enumerateDevices();
-          const cam = devs.find(d=>d.kind==='videoinput' && d.label.includes('Unity Video Capture'));
+          const cam  = devs.find(d => d.kind==='videoinput' && d.label.includes('Unity Video Capture'));
           if (cam) return cam;
-          await new Promise(r=>setTimeout(r, interval));
+          await new Promise(r => setTimeout(r, interval));
         }
         return null;
       }
@@ -447,13 +459,13 @@
         }
       }
 
-      ;(async()=>{
+      ;(async ()=>{
         const cam = await waitUnity();
         if (cam) {
           log('[INFO] Unity カメラ検出');
           startComputeCamera(cam.deviceId);
         } else {
-          computeMsg.textContent = 'Unity カメラ未検出。手動選択してください';
+          computeMsg.textContent = 'Unity カメラ未検出。手動で選択してください';
           fbUI.style.display = 'block';
           fillList();
         }
@@ -462,7 +474,7 @@
       navigator.mediaDevices.ondevicechange = async () => {
         if (localVideo.srcObject) return;
         const devs = await navigator.mediaDevices.enumerateDevices();
-        const cam = devs.find(d=>d.kind==='videoinput' && d.label.includes('Unity Video Capture'));
+        const cam  = devs.find(d => d.kind==='videoinput' && d.label.includes('Unity Video Capture'));
         if (cam) {
           log('[INFO] devicechange で Unity カメラ検出');
           startComputeCamera(cam.deviceId);
