@@ -1,413 +1,593 @@
-<!doctype html>
+<!--
+Project: Dual-Camera Capture & P2P Transfer (GitHub Pages + WebRTC + Firebase Signaling)
+Author: ChatGPT
+How to use this file:
+1) Create a GitHub repo (public or private). Enable GitHub Pages for the repo (main branch / root).
+2) Create the files listed below in the repo with exactly these paths.
+3) Create a Firebase project (free tier is fine). Enable Firestore (in test mode for dev) and enable Anonymous Auth. Copy your web config into config.js as instructed below.
+4) Open https://<your-username>.github.io/<your-repo>/ on: 
+   - Smartphone (Controller+Storage): choose "Phone" role.
+   - Notebook PC① (Tethered camera): choose "PC" role.
+   - (Optional) Desktop PC②: later, open same site to fetch files P2P via WebRTC or download from the phone via USB.
+
+Files in this single document (search for the markers):
+  [1] /index.html
+  [2] /phone.html
+  [3] /pc.html
+  [4] /js/config.js  (EDIT your Firebase config here)
+  [5] /js/common.js  (signaling + utilities)
+  [6] /js/recorder.js (MediaRecorder chunking)
+  [7] /styles.css
+-->
+
+<!-- ======================== [1] /index.html ======================== -->
+<!DOCTYPE html>
 <html lang="ja">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>3D Pose Compare (MediaPipe × Three.js) — sequential detect fixed</title>
-<style>
-  :root{--bg:#0b0f14;--panel:#111826;--accent:#4aa8ff;--ok:#36cfc9;--warn:#ffb020;--err:#ff5c7a;--text:#e6f0ff;--muted:#9fb3c8;}
-  *{box-sizing:border-box}
-  body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,Segoe UI,Roboto,Helvetica,Arial}
-  header{padding:14px 16px;border-bottom:1px solid #1d2636;background:linear-gradient(180deg,#0d141f,#0b0f14)}
-  header h1{margin:0;font-size:16px;letter-spacing:.3px}
-  .wrap{display:grid;grid-template-columns:360px 1fr;gap:12px;padding:12px}
-  .card{background:var(--panel);border:1px solid #1e2a3c;border-radius:14px;box-shadow:0 8px 30px rgba(0,0,0,.35);overflow:hidden}
-  .card h2{margin:0;padding:12px 14px;border-bottom:1px solid #1d2636;font-size:14px;color:#cfe3ff}
-  .section{padding:12px 14px;display:grid;gap:10px}
-  label{display:grid;gap:6px}
-  input[type="file"]{padding:8px;background:#0c131f;border:1px dashed #2b3b56;border-radius:10px;color:var(--muted)}
-  .row{display:flex;gap:10px;align-items:center}
-  .grow{flex:1}
-  .btn{appearance:none;border:1px solid #234169;background:#112339;color:#d8ecff;border-radius:10px;padding:8px 12px;cursor:pointer;transition:.15s}
-  .btn:hover{border-color:#2e6db5}
-  .btn.primary{background:linear-gradient(180deg,#1a64b5,#134c8a);border-color:#1e6bd6;color:white}
-  .btn.ghost{background:transparent;border-color:#2a3a53}
-  .btn:disabled{opacity:.55;cursor:not-allowed;filter:grayscale(.2)}
-  .badge{display:inline-flex;align-items:center;gap:6px;font-size:12px;border-radius:999px;padding:4px 8px;border:1px solid #2a3a53;color:#b8cbe4}
-  .badge.ok{border-color:#1f6a66;color:#9ff3ec}
-  .badge.warn{border-color:#6b510f;color:#ffd68a}
-  .badge.err{border-color:#6b1f2a;color:#ff9fb0}
-  .mediaBox{display:grid;gap:10px}
-  video, img, canvas.preview{width:100%;max-height:180px;object-fit:contain;background:#0a0f18;border:1px solid #1b2739;border-radius:10px}
-  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
-  .status{white-space:pre-wrap;font-family:ui-monospace,Menlo,Consolas,monospace;background:#0a1018;padding:10px;border-radius:10px;border:1px solid #1c2536;color:#9fb3c8;max-height:160px;overflow:auto}
-  #threeWrap{position:relative;height:72vh;min-height:420px}
-  #threeContainer{position:absolute;inset:0}
-  .legend{position:absolute;right:10px;top:10px;display:flex;gap:8px;z-index:2}
-  .dot{width:10px;height:10px;border-radius:50%}
-  .dot.a{background:#7cc1ff}
-  .dot.b{background:#ff84b3}
-  .toast{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);background:#0e1524;border:1px solid #2a3a53;border-radius:12px;padding:10px 14px;color:#cfe3ff;box-shadow:0 8px 30px rgba(0,0,0,.35);opacity:0;pointer-events:none;transition:.25s}
-  .toast.show{opacity:1;pointer-events:auto}
-  .small{font-size:12px;color:var(--muted)}
-  .busyOverlay{position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:rgba(8,12,20,.35);backdrop-filter:blur(1px);z-index:1}
-  .busyOverlay.show{display:flex}
-  .spinner{width:62px;height:62px;border-radius:50%;border:6px solid rgba(255,255,255,.15);border-top-color:#7cc1ff;animation:spin 1.1s linear infinite}
-  @keyframes spin{to{transform:rotate(360deg)}}
-</style>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Dual-Cam Capture</title>
+  <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
-<header>
-  <h1>3Dポーズ比較（MediaPipe Pose × Three.js）— 並列検出を禁止した安定版</h1>
-</header>
+  <main class="wrap">
+    <h1>Dual‑Camera Capture & P2P Transfer</h1>
+    <p>スマホをコントローラ兼保存先に、PC①は自動録画。撮影後はスマホからPC②へP2P転送またはUSBで移動できます。</p>
 
-<div class="wrap">
-  <div class="card">
-    <h2>入力とフレーム指定</h2>
-    <div class="section mediaBox">
-      <div class="grid2">
-        <div>
-          <label>
-            <span>メディアA（動画または画像）</span>
-            <input id="fileA" type="file" accept="video/*,image/*" />
-          </label>
-          <video id="videoA" class="hide" controls muted playsinline></video>
-          <img id="imgA" class="hide" alt="" />
-          <canvas id="prevA" class="preview"></canvas>
-          <div class="row">
-            <input id="seekA" class="grow" type="range" min="0" max="1" step="0.001" value="0" />
-            <span id="timeA" class="small" style="width:80px;text-align:right">00:00.000</span>
-          </div>
-        </div>
-        <div>
-          <label>
-            <span>メディアB（動画または画像）</span>
-            <input id="fileB" type="file" accept="video/*,image/*" />
-          </label>
-          <video id="videoB" class="hide" controls muted playsinline></video>
-          <img id="imgB" class="hide" alt="" />
-          <canvas id="prevB" class="preview"></canvas>
-          <div class="row">
-            <input id="seekB" class="grow" type="range" min="0" max="1" step="0.001" value="0" />
-            <span id="timeB" class="small" style="width:80px;text-align:right">00:00.000</span>
-          </div>
-        </div>
-      </div>
-
-      <div class="grid3">
-        <button id="btnDetect" class="btn primary">このフレームで推定/再推定</button>
-        <button id="btnSwap" class="btn ghost">A/B 入れ替え</button>
-        <button id="btnClear" class="btn ghost">リセット</button>
-      </div>
-
+    <section class="card">
+      <h2>ルームを作成 / 参加</h2>
+      <label>Room ID <input id="room" placeholder="例: kyudo-2025-10-21" /></label>
       <div class="row">
-        <span class="badge" id="mdlStatus">モデル: 読み込み中...</span>
-        <span class="badge ok" id="autoBadge">自動推定 ON</span>
-        <button id="btnAuto" class="btn">自動 ON/OFF</button>
+        <a class="btn" id="go-phone">スマホで参加（Phone）</a>
+        <a class="btn ghost" id="go-pc">PC①で参加（PC）</a>
       </div>
-
-      <details>
-        <summary>ログ / エラー</summary>
-        <div id="status" class="status">ready.</div>
-      </details>
-
-      <div class="small">
-        ・推定中は3Dビューにスピナー、操作を一時無効化<br/>
-        ・成功=緑背景、未検出/失敗=赤背景、初期=濃紺
-      </div>
-    </div>
-  </div>
-
-  <div class="card" id="threeCard">
-    <h2>3Dビュー（軸=相対/メートル）</h2>
-    <div class="section" id="threeWrap">
-      <div id="threeContainer"></div>
-      <div class="busyOverlay" id="busyOverlay" aria-hidden="true">
-        <div class="spinner" aria-label="推定中"></div>
-      </div>
-      <div class="legend">
-        <span class="badge"><span class="dot a"></span> A</span>
-        <span class="badge"><span class="dot b"></span> B</span>
-      </div>
-    </div>
-  </div>
-</div>
-
-<div id="toast" class="toast"></div>
-
-<script src="https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/three@0.161.0/examples/js/controls/OrbitControls.js"></script>
-
-<script type="module">
-  import {FilesetResolver, PoseLandmarker} from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
-
-  const $ = (id)=>document.getElementById(id);
-  const fileA=$('fileA'), fileB=$('fileB');
-  const videoA=$('videoA'), videoB=$('videoB');
-  const imgA=$('imgA'), imgB=$('imgB');
-  const prevA=$('prevA'), prevB=$('prevB');
-  const seekA=$('seekA'), seekB=$('seekB');
-  const timeA=$('timeA'), timeB=$('timeB');
-  const btnDetect=$('btnDetect'), btnSwap=$('btnSwap'), btnClear=$('btnClear'), btnAuto=$('btnAuto');
-  const statusBox=$('status'), mdlStatus=$('mdlStatus');
-  const threeContainer=$('threeContainer'), threeWrap=$('threeWrap');
-  const autoBadge=$('autoBadge'), toastEl=$('toast'), busyOverlay=$('busyOverlay');
-
-  // ---- flags / timers ----
-  let autoDetect = true;
-  let detectTimer = 0;
-
-  const log=(...a)=>{ console.log(...a); statusBox.textContent=(statusBox.textContent+'\n'+a.join(' ')).slice(-4000); statusBox.scrollTop=statusBox.scrollHeight; };
-  const toast=(msg)=>{ toastEl.textContent=msg; toastEl.classList.add('show'); setTimeout(()=>toastEl.classList.remove('show'),2200); };
-
-  // ---- media state ----
-  const mediaA={type:null,el:null,url:null,duration:0};
-  const mediaB={type:null,el:null,url:null,duration:0};
-
-  function resetMediaView(slot){
-    const video=slot==='A'?videoA:videoB;
-    const img=slot==='A'?imgA:imgB;
-    const prev=slot==='A'?prevA:prevB;
-    const seek=slot==='A'?seekA:seekB;
-    const time=slot==='A'?timeA:timeB;
-    video.classList.add('hide'); video.removeAttribute('src'); video.load();
-    img.classList.add('hide'); img.removeAttribute('src');
-    const ctx=prev.getContext('2d'); ctx.clearRect(0,0,prev.width,prev.height);
-    seek.disabled=true; seek.value=0; time.textContent="00:00.000";
-  }
-
-  function formatTime(s){ if(!isFinite(s)) return "00:00.000"; const m=Math.floor(s/60), sec=s%60; return `${String(m).padStart(2,'0')}:${sec.toFixed(3).padStart(6,'0')}`; }
-
-  async function loadFile(slot, file){
-    try{
-      if(!file){ resetMediaView(slot); return; }
-      const url=URL.createObjectURL(file);
-      const isVideo=file.type.startsWith('video');
-      const media=slot==='A'?mediaA:mediaB;
-      if(media.url) URL.revokeObjectURL(media.url);
-      media.url=url;
-
-      const video=slot==='A'?videoA:videoB;
-      const img=slot==='A'?imgA:imgB;
-      const prev=slot==='A'?prevA:prevB;
-      const seek=slot==='A'?seekA:seekB;
-      const time=slot==='A'?timeA:timeB;
-
-      if(isVideo){
-        img.classList.add('hide'); video.classList.remove('hide'); video.src=url;
-        await video.play().catch(()=>{}); video.pause();
-        await new Promise(res=> video.onloadedmetadata=()=>res());
-        media.type='video'; media.el=video; media.duration=video.duration||0;
-        seek.disabled=false; drawPreview(slot); if(autoDetect) detectBothDebounced();
-      }else{
-        video.classList.add('hide'); img.classList.remove('hide'); img.src=url;
-        await new Promise((res,rej)=>{ img.onload=res; img.onerror=rej; });
-        media.type='image'; media.el=img; media.duration=0;
-        fitDraw(prev.getContext('2d'), img, prev);
-        seek.disabled=true; time.textContent="画像";
-        if(autoDetect) detectBothDebounced();
-      }
-    }catch(e){ log('loadFile error:', e); toast('読み込みエラー: '+e.message); }
-  }
-
-  function fitDraw(ctx, srcEl, canvas){
-    const w=canvas.width=canvas.clientWidth*devicePixelRatio;
-    const h=canvas.height=canvas.clientHeight*devicePixelRatio;
-    const sw=srcEl.videoWidth||srcEl.naturalWidth, sh=srcEl.videoHeight||srcEl.naturalHeight;
-    if(!sw||!sh) return;
-    const scale=Math.min(w/sw,h/sh); const dw=Math.round(sw*scale), dh=Math.round(sh*scale);
-    const dx=Math.round((w-dw)/2), dy=Math.round((h-dh)/2);
-    ctx.clearRect(0,0,w,h); ctx.imageSmoothingEnabled=true; ctx.drawImage(srcEl,0,0,sw,sh,dx,dy,dw,dh);
-  }
-  function drawPreview(slot){
-    const media=slot==='A'?mediaA:mediaB;
-    const prev=slot==='A'?prevA:prevB;
-    if(!media.el) return;
-    fitDraw(prev.getContext('2d'), media.el, prev);
-    if(media.type==='video'){ (slot==='A'?timeA:timeB).textContent=formatTime(media.el.currentTime||0); }
-  }
-
-  seekA.addEventListener('input', ()=>{ if(mediaA.type==='video'&&mediaA.el) mediaA.el.currentTime=(mediaA.duration||0)*Number(seekA.value); });
-  seekB.addEventListener('input', ()=>{ if(mediaB.type==='video'&&mediaB.el) mediaB.el.currentTime=(mediaB.duration||0)*Number(seekB.value); });
-  videoA.addEventListener('seeked', ()=>{ drawPreview('A'); if(autoDetect) detectBothDebounced(); });
-  videoB.addEventListener('seeked', ()=>{ drawPreview('B'); if(autoDetect) detectBothDebounced(); });
-  window.addEventListener('resize', ()=>{ drawPreview('A'); drawPreview('B'); resizeThree(); });
-
-  fileA.addEventListener('change', e=> loadFile('A', e.target.files?.[0]));
-  fileB.addEventListener('change', e=> loadFile('B', e.target.files?.[0]));
-  btnDetect.addEventListener('click', ()=>{ log('btnDetect clicked'); detectBoth(); });
-
-  btnSwap.addEventListener('click', ()=>{
-    const tmp={...mediaA}; Object.assign(mediaA, mediaB); Object.assign(mediaB, tmp);
-    applyMediaToSlot('A', mediaA); applyMediaToSlot('B', mediaB); detectBothDebounced();
-  });
-
-  function applyMediaToSlot(slot, media){
-    const video=slot==='A'?videoA:videoB, img=slot==='A'?imgA:imgB, seek=slot==='A'?seekA:seekB;
-    resetMediaView(slot);
-    if(!media.el) return;
-    if(media.type==='video'){
-      img.classList.add('hide'); video.classList.remove('hide'); video.src=media.url; video.pause();
-      video.onloadedmetadata=()=>{ seek.disabled=false; drawPreview(slot); };
-    }else{
-      video.classList.add('hide'); img.classList.remove('hide'); img.src=media.url; img.onload=()=>drawPreview(slot);
-    }
-  }
-
-  btnClear.addEventListener('click', ()=>{
-    ['A','B'].forEach(s=> resetMediaView(s));
-    Object.assign(mediaA,{type:null,el:null,url:null,duration:0});
-    Object.assign(mediaB,{type:null,el:null,url:null,duration:0});
-    clearSkeletons(); setSceneBg('neutral');
-    toast('リセットしました');
-  });
-
-  btnAuto.addEventListener('click', ()=>{
-    autoDetect=!autoDetect;
-    autoBadge.textContent=`自動推定 ${autoDetect?'ON':'OFF'}`;
-    autoBadge.className=`badge ${autoDetect?'ok':'warn'}`;
-    if(autoDetect) detectBothDebounced();
-  });
-
-  // ---- Pose Landmarker ----
-  let landmarker=null;
-  mdlStatus.textContent='モデル: 読み込み中...';
-  (async ()=>{
-    try{
-      const fileset=await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
-      landmarker=await PoseLandmarker.createFromOptions(fileset,{
-        baseOptions:{ modelAssetPath:"https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task" },
-        runningMode:"IMAGE", numPoses:1,
-        minPoseDetectionConfidence:0.5, minPosePresenceConfidence:0.5, minTrackingConfidence:0.5,
-        outputSegmentationMasks:false
-      });
-      mdlStatus.textContent='モデル: 読み込み完了'; mdlStatus.className='badge ok';
-      log('PoseLandmarker ready.');
-    }catch(e){
-      mdlStatus.textContent='モデル: 読み込み失敗'; mdlStatus.className='badge err';
-      log('Pose model load error:', e); toast('モデル読み込みに失敗しました: '+e.message);
-    }
-  })();
-
-  // ---- Three.js scene ----
-  const THREE_COL_A=0x7cc1ff, THREE_COL_B=0xff84b3;
-  const BG_NEUTRAL=0x07101a, BG_SUCCESS=0x0f1a12, BG_FAIL=0x1a1010;
-
-  const scene=new THREE.Scene();
-  scene.background=new THREE.Color(BG_NEUTRAL);
-  const camera=new THREE.PerspectiveCamera(45,16/9,0.01,100);
-  camera.position.set(0.8,1.2,2.0);
-  const renderer=new THREE.WebGLRenderer({antialias:true});
-  threeContainer.appendChild(renderer.domElement);
-  const controls=new THREE.OrbitControls(camera,renderer.domElement); controls.enableDamping=true;
-
-  const grid=new THREE.GridHelper(4,8,0x214a7a,0x162c49); grid.position.y=-0.9; scene.add(grid);
-  scene.add(new THREE.AxesHelper(0.5)); // ← 原点にXYZ軸を表示（描画確認用）
-  const light1=new THREE.DirectionalLight(0xffffff,1.0); light1.position.set(1,2,2); scene.add(light1);
-  scene.add(new THREE.AmbientLight(0x88a,.6));
-
-  const groupA=new THREE.Group(); scene.add(groupA);
-  const groupB=new THREE.Group(); scene.add(groupB);
-
-  function clearSkeletons(){ [groupA,groupB].forEach(g=>{ while(g.children.length) g.remove(g.children[0]); }); }
-
-  function resizeThree(){
-    const r=threeContainer.getBoundingClientRect();
-    const w=Math.max(1, r.width), h=Math.max(1, r.height);
-    renderer.setPixelRatio(Math.min(devicePixelRatio,2));
-    renderer.setSize(w,h,false);
-    camera.aspect=w/h; camera.updateProjectionMatrix();
-  }
-  // append直後 & 初回描画でもう一度
-  resizeThree();
-  requestAnimationFrame(resizeThree);
-  window.addEventListener('resize', resizeThree);
-
-  (function animate(){ requestAnimationFrame(animate); controls.update(); renderer.render(scene,camera); })();
-
-  const EDGES=[[11,12],[11,13],[13,15],[12,14],[14,16],[11,23],[12,24],[23,24],[23,25],[25,27],[24,26],[26,28],[27,29],[29,31],[28,30],[30,32],[11,5],[12,6],[5,7],[6,8],[7,9],[8,10],[5,6],[0,1],[1,2],[2,3],[3,7],[0,4],[4,5],[4,8]];
-  function centerScale(lm){
-    const ch=(a,b)=>({x:(lm[a].x+lm[b].x)/2,y:(lm[a].y+lm[b].y)/2,z:(lm[a].z+lm[b].z)/2});
-    const c=ch(23,24); const d=(i,j)=>Math.hypot(lm[i].x-lm[j].x,lm[i].y-lm[j].y,(lm[i].z-lm[j].z));
-    let scale=d(11,12); if(!isFinite(scale)||scale<1e-6) scale=0.3;
-    return lm.map(p=>({x:(p.x-c.x)/scale, y:-(p.y-c.y)/scale, z:-(p.z-c.z)/scale, v:p.visibility??0}));
-  }
-  function makeSkeleton(pts,color){
-    const g=new THREE.Group();
-    const geom=new THREE.BufferGeometry().setFromPoints(pts.map(p=>new THREE.Vector3(p.x,p.y,p.z)));
-    g.add(new THREE.Points(geom,new THREE.PointsMaterial({size:0.025,color,sizeAttenuation:true})));
-    const lineGeo=new THREE.BufferGeometry(); const verts=[];
-    for(const [a,b] of EDGES){ const pa=pts[a], pb=pts[b]; verts.push(pa.x,pa.y,pa.z,pb.x,pb.y,pb.z); }
-    lineGeo.setAttribute('position',new THREE.Float32BufferAttribute(verts,3));
-    g.add(new THREE.LineSegments(lineGeo,new THREE.LineBasicMaterial({color})));
-    return g;
-  }
-  function placeGroups(la, lb){
-    clearSkeletons();
-    if(la){ const na=centerScale(la); const skA=makeSkeleton(na,THREE_COL_A); groupA.add(skA); groupA.position.set(-0.4,0,0); }
-    if(lb){ const nb=centerScale(lb); const skB=makeSkeleton(nb,THREE_COL_B); groupB.add(skB); groupB.position.set(+0.4,0,0); }
-  }
-  function setSceneBg(mode){
-    const c = mode==='success'?BG_SUCCESS : mode==='fail'?BG_FAIL : BG_NEUTRAL;
-    scene.background.setHex(c);
-  }
-
-  // ---- busy (spinner + disable) ----
-  function setBusy(b){
-    busyOverlay.classList.toggle('show', b);
-    const disableList=[btnDetect,btnSwap,btnClear,btnAuto,fileA,fileB,seekA,seekB];
-    disableList.forEach(el=>{ if(el) el.disabled=b; });
-    threeWrap.setAttribute('aria-busy', b?'true':'false');
-  }
-
-  // ---- detection (SEQUENTIAL) ----
-  function detectBothDebounced(){ clearTimeout(detectTimer); detectTimer=setTimeout(detectBoth,120); }
-
-  function drawToTempCanvas(media){
-    const w=media.el?.videoWidth||media.el?.naturalWidth||0;
-    const h=media.el?.videoHeight||media.el?.naturalHeight||0;
-    if(!w||!h) throw new Error('メディアの寸法が取得できません');
-    const cvs=document.createElement('canvas');
-    cvs.width=w; cvs.height=h;
-    const ctx=cvs.getContext('2d');
-    ctx.drawImage(media.el,0,0,w,h);
-    return cvs; // ← これを detect() に渡す
-  }
-
-  async function detectOne(media){
-    if(!media.el) return null;
-    const canvas = drawToTempCanvas(media);
-    // IMAGEモードでは detect(imageSource) を逐次呼ぶ
-    const out = landmarker.detect(canvas);
-    return out?.landmarks?.[0] || null;
-  }
-
-  async function detectBoth(){
-    log('detectBoth start');
-    if(!landmarker){ toast('モデル準備中…'); return; }
-    setBusy(true);
-    mdlStatus.textContent='推定中...'; mdlStatus.className='badge warn';
-    try{
-      // ← 並列禁止：順番に呼ぶ
-      const la = await detectOne(mediaA);
-      const lb = await detectOne(mediaB);
-
-      placeGroups(la,lb);
-      const okA=!!la, okB=!!lb;
-      if(okA && okB){
-        setSceneBg('success'); toast('両方のフレームでポーズ検出完了'); log('A: 検出OK | B: 検出OK');
-      }else{
-        setSceneBg('fail');
-        const msg=`警告: ${!okA?'Aが未検出':''}${(!okA&&!okB)?' / ':''}${!okB?'Bが未検出':''}`;
-        toast(msg); log(`A: ${okA?'検出OK':'検出なし'} | B: ${okB?'検出OK':'検出なし'}`);
-      }
-    }catch(e){
-      setSceneBg('fail'); log('detectBoth error:', e); toast('推定中にエラー: '+e.message);
-    }finally{
-      mdlStatus.textContent='モデル: 読み込み完了'; mdlStatus.className='badge ok';
-      setBusy(false);
-    }
-  }
-</script>
-
-<script>
-  // .hide の表示制御（video/imgのみ監視）
-  for(const v of document.querySelectorAll('.hide')) v.style.display='none';
-  document.querySelectorAll('video,img').forEach(v=>{
-    const obs=new MutationObserver(()=>{ v.style.display=v.classList.contains('hide')?'none':''; });
-    obs.observe(v,{attributes:true,attributeFilter:['class']});
-  });
-</script>
+      <p class="hint">※ 同じ Room ID をスマホとPC①で入力して同時参加します。</p>
+    </section>
+  </main>
+  <script>
+    const roomInput = document.getElementById('room');
+    document.getElementById('go-phone').onclick = () => {
+      const r = roomInput.value.trim();
+      if(!r) return alert('Room ID を入力');
+      location.href = `./phone.html?room=${encodeURIComponent(r)}`;
+    };
+    document.getElementById('go-pc').onclick = () => {
+      const r = roomInput.value.trim();
+      if(!r) return alert('Room ID を入力');
+      location.href = `./pc.html?room=${encodeURIComponent(r)}`;
+    };
+  </script>
 </body>
 </html>
+
+<!-- ======================== [2] /phone.html ======================== -->
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Phone — Dual‑Cam Capture</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <main class="wrap">
+    <h1>Phone（コントローラ & 保存）</h1>
+    <section class="grid-2">
+      <div class="card">
+        <h2>スマホのカメラ</h2>
+        <video id="phonePreview" playsinline muted></video>
+        <div class="row">
+          <button id="start" class="btn">撮影開始</button>
+          <button id="stop" class="btn danger" disabled>停止</button>
+        </div>
+        <div class="row">
+          <label><input type="checkbox" id="countdown" checked /> 両端末に3秒カウントダウン</label>
+        </div>
+        <div class="row">
+          <label>解像度<select id="resPhone">
+            <option value="1280x720">1280x720</option>
+            <option value="1920x1080">1920x1080</option>
+            <option value="3840x2160">3840x2160 (端末次第)</option>
+          </select></label>
+          <label>FPS<select id="fpsPhone">
+            <option>30</option>
+            <option>60</option>
+            <option>120</option>
+          </select></label>
+        </div>
+        <div class="row">
+          <label>録画形式<select id="mimePhone">
+            <option>video/webm;codecs=vp9</option>
+            <option>video/webm;codecs=vp8</option>
+            <option>video/webm;codecs=h264</option>
+          </select></label>
+        </div>
+        <div class="row">
+          <progress id="saveProg" max="100" value="0"></progress>
+          <span id="saveInfo"></span>
+        </div>
+        <div class="row"><button id="dlPhone" class="btn ghost" disabled>スマホ動画を保存</button></div>
+      </div>
+
+      <div class="card">
+        <h2>PC①の動画受信</h2>
+        <div class="row">
+          <progress id="pcInProg" max="100" value="0"></progress>
+          <span id="pcInInfo"></span>
+        </div>
+        <div class="row"><button id="dlPC" class="btn ghost" disabled>PC①動画を保存</button></div>
+        <div class="row"><button id="relayToPC2" class="btn" disabled>PC②へP2P転送</button></div>
+        <p class="hint">※ PC②でも同じページを開き、Room ID を同じにして「PC」ではなく <b>PC②（受信専用）</b>として join（下記スイッチ）
+          すればP2Pでスマホから即時転送可能です。ネット未接続ならUSBで後で移動。</p>
+        <label><input type="checkbox" id="pc2Receiver" /> 次の接続はPC②（受信専用）として扱う</label>
+      </div>
+    </section>
+  </main>
+
+  <script type="module">
+    import { initFirebase, joinRoomAsPhone, bytesPretty, saveBlob } from './js/common.js';
+    import { captureStreamAndRecord } from './js/recorder.js';
+    await initFirebase();
+
+    const url = new URL(location.href);
+    const roomId = url.searchParams.get('room');
+    if(!roomId){ alert('Room ID がありません'); location.href = './'; }
+
+    const els = {
+      phonePreview: document.getElementById('phonePreview'),
+      start: document.getElementById('start'),
+      stop: document.getElementById('stop'),
+      countdown: document.getElementById('countdown'),
+      resPhone: document.getElementById('resPhone'),
+      fpsPhone: document.getElementById('fpsPhone'),
+      mimePhone: document.getElementById('mimePhone'),
+      saveProg: document.getElementById('saveProg'),
+      saveInfo: document.getElementById('saveInfo'),
+      dlPhone: document.getElementById('dlPhone'),
+      pcInProg: document.getElementById('pcInProg'),
+      pcInInfo: document.getElementById('pcInInfo'),
+      dlPC: document.getElementById('dlPC'),
+      relayToPC2: document.getElementById('relayToPC2'),
+      pc2Receiver: document.getElementById('pc2Receiver'),
+    };
+
+    // Join as phone (controller + sink for PC①)
+    const phone = await joinRoomAsPhone(roomId, {
+      onPC1FileProgress: (got, total) => {
+        els.pcInProg.max = total || 100;
+        els.pcInProg.value = got;
+        els.pcInInfo.textContent = `${bytesPretty(got)} / ${total?bytesPretty(total):'…'}`;
+      },
+      onPC1FileReady: (blob) => {
+        els.dlPC.disabled = false;
+        els.dlPC.onclick = () => saveBlob(blob, `PC1_${roomId}_${Date.now()}.webm`);
+        els.relayToPC2.disabled = false;
+        phone.setPC1Blob(blob);
+      }
+    });
+
+    // Prepare phone camera preview & recorder
+    let phoneRecorder = null;
+
+    async function startBoth() {
+      const [w,h] = els.resPhone.value.split('x').map(Number);
+      const fps = Number(els.fpsPhone.value);
+      const mime = els.mimePhone.value;
+      phone.sendCommand({type:'prepare', payload:{countdown: els.countdown.checked, fps}});
+      const {stream, getBlob, onData, stop} = await captureStreamAndRecord({
+        video: { width:w, height:h, frameRate:fps, facingMode:'environment' },
+        audio: true,
+        mimeType: mime,
+        timesliceMs: 1500, // chunk every 1.5s for progressive transfer if needed later
+        previewEl: els.phonePreview,
+      });
+      phoneRecorder = {getBlob, stop};
+
+      // Tell PC① to start after optional countdown
+      await phone.sendCommand({type:'start'});
+
+      els.start.disabled = true;
+      els.stop.disabled = false;
+    }
+
+    async function stopBoth() {
+      // Stop phone
+      const phoneBlob = await phoneRecorder.stop();
+      els.dlPhone.disabled = false;
+      els.dlPhone.onclick = () => saveBlob(phoneBlob, `PHONE_${roomId}_${Date.now()}.webm`);
+
+      // Tell PC① to stop and begin upload to phone
+      const meta = await phone.sendCommand({type:'stop'}); // returns {size, mime}
+
+      // Save progress UI (phone own file size)
+      els.saveProg.value = 100; els.saveProg.max = 100;
+      els.saveInfo.textContent = `スマホ録画: ${bytesPretty(phoneBlob.size)} saved`;
+
+      els.start.disabled = false;
+      els.stop.disabled = true;
+    }
+
+    els.start.onclick = startBoth;
+    els.stop.onclick = stopBoth;
+
+    // Optional: treat next peer as PC② receiver (no camera), just receive relayed blobs
+    els.pc2Receiver.addEventListener('change', ()=>{
+      phone.setNextPeerAsReceiverOnly(els.pc2Receiver.checked);
+    });
+
+    els.relayToPC2.onclick = async () => {
+      if(!phone.hasPC1Blob()) return alert('PC①動画がありません');
+      try {
+        await phone.relayBlobToPC2();
+        alert('PC②へ転送完了');
+      } catch(e){
+        console.error(e);
+        alert('PC②への転送に失敗しました。PC②が同じRoomで待機中か確認してください');
+      }
+    };
+  </script>
+</body>
+</html>
+
+<!-- ======================== [3] /pc.html ======================== -->
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PC — Dual‑Cam Capture</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <main class="wrap">
+    <h1>PC①（自動録画端末）</h1>
+    <section class="card">
+      <video id="pcPreview" playsinline muted></video>
+      <div class="row">
+        <label>解像度<select id="resPC">
+          <option value="1280x720">1280x720</option>
+          <option value="1920x1080">1920x1080</option>
+          <option value="3840x2160">3840x2160 (端末/カメラ依存)</option>
+        </select></label>
+        <label>FPS<select id="fpsPC">
+          <option>30</option>
+          <option>60</option>
+          <option>120</option>
+        </select></label>
+        <label>録画形式<select id="mimePC">
+          <option>video/webm;codecs=vp9</option>
+          <option>video/webm;codecs=vp8</option>
+          <option>video/webm;codecs=h264</option>
+        </select></label>
+      </div>
+      <div class="row">
+        <progress id="upProg" max="100" value="0"></progress>
+        <span id="upInfo"></span>
+      </div>
+      <p class="hint">※ スマホからの開始/停止指示に連動します。停止後、自動でスマホへファイルをP2P送信します。</p>
+    </section>
+  </main>
+
+  <script type="module">
+    import { initFirebase, joinRoomAsPC, bytesPretty } from './js/common.js';
+    import { captureStreamAndRecord } from './js/recorder.js';
+    await initFirebase();
+
+    const url = new URL(location.href);
+    const roomId = url.searchParams.get('room');
+    if(!roomId){ alert('Room ID がありません'); location.href = './'; }
+
+    const els = {
+      pcPreview: document.getElementById('pcPreview'),
+      resPC: document.getElementById('resPC'),
+      fpsPC: document.getElementById('fpsPC'),
+      mimePC: document.getElementById('mimePC'),
+      upProg: document.getElementById('upProg'),
+      upInfo: document.getElementById('upInfo'),
+    };
+
+    let rec = null; let lastMime = null;
+
+    const pc = await joinRoomAsPC(roomId, {
+      onCommand: async (cmd) => {
+        if(cmd.type==='prepare'){
+          // Optional countdown on both devices
+          if(cmd.payload?.countdown){ await new Promise(r=>setTimeout(r, 3000)); }
+        }
+        if(cmd.type==='start'){
+          const [w,h] = els.resPC.value.split('x').map(Number);
+          const fps = Number(els.fpsPC.value);
+          const mime = els.mimePC.value; lastMime = mime;
+          rec = await captureStreamAndRecord({
+            video:{width:w,height:h,frameRate:fps}, audio:true, mimeType:mime,
+            previewEl: els.pcPreview,
+          });
+        }
+        if(cmd.type==='stop'){
+          const blob = await rec.stop();
+          // begin upload (P2P send) to phone in chunks
+          const total = blob.size; let sent = 0;
+          await pc.sendFileToPhone(blob, {
+            onProgress: (n)=>{ sent=n; els.upProg.max = total; els.upProg.value = n; els.upInfo.textContent = `${bytesPretty(n)} / ${bytesPretty(total)}`; },
+          });
+          return { size: total, mime: lastMime };
+        }
+      }
+    });
+  </script>
+</body>
+</html>
+
+<!-- ======================== [4] /js/config.js ======================== -->
+// Fill your Firebase web config below
+export const firebaseConfig = {
+  apiKey: "YOUR_API_KEY",
+  authDomain: "YOUR_PROJECT.firebaseapp.com",
+  projectId: "YOUR_PROJECT",
+  storageBucket: "YOUR_PROJECT.appspot.com",
+  messagingSenderId: "000000000000",
+  appId: "1:000000000000:web:xxxxxxxxxxxxxxxxxxxxxx"
+};
+
+// Firestore collections used:
+// rooms/{roomId}/signals (offer/answer/ice)
+// rooms/{roomId}/commands (start/stop/prepare)
+// rooms/{roomId}/meta (receiverOnly flag)
+
+/* Security note: For production, define proper Firestore Security Rules to restrict reads/writes to the room participants
+   using a shared secret (room password) hashed and stored in meta. For development, Firestore test rules are acceptable. */
+
+<!-- ======================== [5] /js/common.js ======================== -->
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
+import { getAuth, signInAnonymously } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
+import { getFirestore, collection, doc, setDoc, addDoc, onSnapshot, serverTimestamp, query, orderBy, deleteDoc } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
+import { firebaseConfig } from './config.js';
+
+let app, db, auth;
+export async function initFirebase(){
+  app = initializeApp(firebaseConfig);
+  auth = getAuth(app);
+  await signInAnonymously(auth);
+  db = getFirestore(app);
+}
+
+export const bytesPretty = (n) => {
+  if(!n && n!==0) return '0 B';
+  const u=['B','KB','MB','GB']; let i=0; let x=n;
+  while(x>=1024 && i<u.length-1){ x/=1024; i++; }
+  return `${x.toFixed(1)} ${u[i]}`;
+};
+
+export function saveBlob(blob, filename){
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+async function createPeerConnection(roomId, role){
+  const pc = new RTCPeerConnection({
+    iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:global.stun.twilio.com:3478?transport=udp' }
+    ]
+  });
+
+  // Firestore paths
+  const roomRef = doc(collection(db, 'rooms'), roomId);
+  const signalsCol = collection(roomRef, 'signals');
+  const commandsCol = collection(roomRef, 'commands');
+  const metaDoc = doc(roomRef, 'meta', 'flags');
+
+  // ICE
+  pc.onicecandidate = async (e)=>{
+    if(e.candidate){ await addDoc(signalsCol, { type:'ice', role, candidate: e.candidate.toJSON(), ts: serverTimestamp() }); }
+  };
+
+  // Clear old signals on fresh join (light cleanup)
+  // NOTE: Not bulletproof but fine for per-session usage.
+  // (In production, use per-client subpaths.)
+  //
+
+  return { pc, roomRef, signalsCol, commandsCol, metaDoc };
+}
+
+// ------------ Phone (controller + sink) ------------
+export async function joinRoomAsPhone(roomId, hooks){
+  const { pc, roomRef, signalsCol, commandsCol, metaDoc } = await createPeerConnection(roomId, 'phone');
+
+  // Data channel for commands to PC①
+  const dc = pc.createDataChannel('cmd');
+  let pc1Blob = null;
+  let nextPeerReceiverOnly = false;
+
+  function setNextPeerAsReceiverOnly(flag){ nextPeerReceiverOnly = !!flag; setDoc(metaDoc, { receiverOnly: nextPeerReceiverOnly }, {merge:true}); }
+
+  function hasPC1Blob(){ return !!pc1Blob; }
+  function setPC1Blob(b){ pc1Blob = b; }
+
+  async function relayBlobToPC2(){
+    // Open a second peer (Phone -> PC②). Here we reuse the same room but receiverOnly flag tells pc.html to skip camera/recording.
+    await setDoc(metaDoc, { receiverOnly: true }, { merge:true });
+    // Create a new data channel for file shipping
+    const ch = pc.createDataChannel('relay');
+    const buf = await pc1Blob.arrayBuffer();
+    const chunk = 64*1024; // 64KB
+    let sent = 0;
+    await new Promise((resolve,reject)=>{
+      ch.onopen = async ()=>{
+        // send simple header
+        ch.send(JSON.stringify({type:'fileHeader', name:`PC1_${roomId}_${Date.now()}.webm`, size: buf.byteLength, mime: pc1Blob.type||'video/webm'}));
+        const timer = setInterval(()=>{
+          while(ch.bufferedAmount < 4*1024*1024 && sent < buf.byteLength){
+            const slice = buf.slice(sent, Math.min(sent+chunk, buf.byteLength));
+            ch.send(slice);
+            sent += slice.byteLength || slice.byteLength===0 ? slice.byteLength : slice.byteLength; // in workersize-compatible env
+          }
+          if(sent>=buf.byteLength){ clearInterval(timer); ch.send(JSON.stringify({type:'fileEnd'})); resolve(); }
+        }, 10);
+      };
+      ch.onerror = reject;
+    });
+  }
+
+  // Incoming data channels (from PC① or PC②)
+  pc.ondatachannel = (ev)=>{
+    const channel = ev.channel;
+    if(channel.label==='pc1file'){
+      // File receiver for PC① stream
+      let header=null; let received=0; let parts=[];
+      channel.onmessage = (e)=>{
+        if(typeof e.data === 'string'){
+          const msg = JSON.parse(e.data);
+          if(msg.type==='fileHeader'){ header = msg; hooks?.onPC1FileProgress?.(0, header.size); }
+          if(msg.type==='fileEnd'){
+            const blob = new Blob(parts, { type: header?.mime || 'video/webm' });
+            hooks?.onPC1FileReady?.(blob); parts=[]; received=0; header=null; }
+        } else {
+          parts.push(e.data); received += e.data.byteLength; hooks?.onPC1FileProgress?.(received, header?.size||0);
+        }
+      };
+    }
+  };
+
+  // Signaling: Phone is the offerer
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+  await addDoc(signalsCol, { type:'offer', sdp: offer.sdp, role:'phone', ts: serverTimestamp() });
+
+  // Listen for answer and ICE
+  onSnapshot(query(signalsCol, orderBy('ts','asc')), async (snap)=>{
+    for(const d of snap.docs){ const data = d.data();
+      if(data.type==='answer' && pc.signalingState!=='stable'){ await pc.setRemoteDescription({ type:'answer', sdp:data.sdp }); }
+      if(data.type==='ice' && data.role==='pc'){ try{ await pc.addIceCandidate(data.candidate); }catch{} }
+    }
+  });
+
+  async function sendCommand(cmd){
+    // also write to commands collection (for logs / debug)
+    await addDoc(commandsCol, { ...cmd, ts: serverTimestamp() });
+    // via datachannel
+    return await new Promise((resolve,reject)=>{
+      dc.onmessage = (e)=>{ try{ resolve(JSON.parse(e.data)); }catch{ resolve(null); } };
+      if(dc.readyState==='open') dc.send(JSON.stringify(cmd)); else dc.onopen=()=>dc.send(JSON.stringify(cmd));
+      setTimeout(()=>resolve(null), 30000); // failsafe
+    });
+  }
+
+  return { sendCommand, setNextPeerAsReceiverOnly, hasPC1Blob, setPC1Blob, relayBlobToPC2 };
+}
+
+// ------------ PC (recorder, uploads to phone) ------------
+export async function joinRoomAsPC(roomId, hooks){
+  const { pc, roomRef, signalsCol, commandsCol, metaDoc } = await createPeerConnection(roomId, 'pc');
+
+  // Receiver-only mode (PC②) — if flagged by phone
+  let receiverOnly = false;
+  onSnapshot(metaDoc, (snap)=>{ const data=snap.data(); receiverOnly = !!data?.receiverOnly; });
+
+  // Data channel for commands (from phone)
+  let cmdChannel = null;
+  pc.ondatachannel = (ev)=>{
+    if(ev.channel.label==='cmd'){
+      cmdChannel = ev.channel;
+      cmdChannel.onmessage = async (e)=>{
+        const cmd = JSON.parse(e.data);
+        const result = await hooks?.onCommand?.(cmd);
+        // reply
+        try{ cmdChannel.send(JSON.stringify(result||{})); }catch{}
+      };
+    }
+    if(ev.channel.label==='relay'){
+      // This is PC② receiving a relayed blob from phone
+      if(!receiverOnly) return; // ignore if not in PC② role
+      let header=null, parts=[], got=0;
+      ev.channel.onmessage = (e)=>{
+        if(typeof e.data==='string'){
+          const msg = JSON.parse(e.data);
+          if(msg.type==='fileHeader'){ header=msg; }
+          if(msg.type==='fileEnd'){
+            const blob = new Blob(parts, { type: header?.mime || 'video/webm' });
+            const name = header?.name || `Relay_${Date.now()}.webm`;
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob); a.download = name; a.click(); URL.revokeObjectURL(a.href);
+            parts=[]; got=0; header=null;
+          }
+        } else { parts.push(e.data); got+=e.data.byteLength; }
+      };
+    }
+  };
+
+  // File sender channel (to phone)
+  const fileCh = pc.createDataChannel('pc1file');
+  async function sendFileToPhone(blob, {onProgress}){
+    const buf = await blob.arrayBuffer();
+    const chunk = 64*1024; let sent=0;
+    await new Promise((resolve,reject)=>{
+      fileCh.onopen = ()=>{
+        fileCh.send(JSON.stringify({type:'fileHeader', name:`PC1_${roomId}_${Date.now()}.webm`, size: buf.byteLength, mime: blob.type||'video/webm'}));
+        const timer = setInterval(()=>{
+          while(fileCh.bufferedAmount < 4*1024*1024 && sent < buf.byteLength){
+            const slice = buf.slice(sent, Math.min(sent+chunk, buf.byteLength));
+            fileCh.send(slice); sent += slice.byteLength; onProgress?.(sent);
+          }
+          if(sent>=buf.byteLength){ clearInterval(timer); fileCh.send(JSON.stringify({type:'fileEnd'})); resolve(); }
+        }, 10);
+      };
+      fileCh.onerror = reject;
+    });
+  }
+
+  // Signaling: PC is the answerer
+  onSnapshot(query(collection(doc(collection(db,'rooms'), roomId), 'signals'), orderBy('ts','asc')), async (snap)=>{
+    for(const d of snap.docs){ const data = d.data();
+      if(data.type==='offer' && data.role==='phone' && !pc.currentRemoteDescription){ await pc.setRemoteDescription({type:'offer', sdp:data.sdp}); const ans = await pc.createAnswer(); await pc.setLocalDescription(ans); await addDoc(collection(doc(collection(db,'rooms'), roomId),'signals'), {type:'answer', sdp: ans.sdp, role:'pc', ts: serverTimestamp()}); }
+      if(data.type==='ice' && data.role==='phone'){ try{ await pc.addIceCandidate(data.candidate); }catch{} }
+    }
+  });
+
+  return { sendFileToPhone };
+}
+
+<!-- ======================== [6] /js/recorder.js ======================== -->
+export async function captureStreamAndRecord({ video, audio, mimeType, timesliceMs=0, previewEl }){
+  const stream = await navigator.mediaDevices.getUserMedia({ video, audio });
+  if(previewEl){ previewEl.srcObject = stream; await previewEl.play(); }
+  const chunks = []; let recorder;
+  try { recorder = new MediaRecorder(stream, { mimeType }); }
+  catch(e){ console.warn('MediaRecorder init failed, fallback no mime'); recorder = new MediaRecorder(stream); }
+
+  recorder.ondataavailable = (e)=>{ if(e.data && e.data.size>0){ chunks.push(e.data); } };
+  recorder.start(timesliceMs || undefined);
+
+  async function stop(){
+    await new Promise(res=>{ recorder.onstop = res; recorder.stop(); });
+    stream.getTracks().forEach(t=>t.stop());
+    const blob = new Blob(chunks, { type: recorder.mimeType || mimeType || 'video/webm' });
+    return blob;
+  }
+
+  return { stream, stop };
+}
+
+<!-- ======================== [7] /styles.css ======================== -->
+:root{ --bg:#0b0c10; --fg:#e8e8e8; --muted:#a0a0a0; --card:#151820; --acc:#4e9af1; --warn:#ffcc00; --danger:#f25f5c; }
+*{ box-sizing: border-box; }
+body{ margin:0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Noto Sans JP, sans-serif; color:var(--fg); background:linear-gradient(180deg,#0b0c10,#0e1218); }
+.wrap{ max-width:1000px; margin:0 auto; padding:24px; }
+h1{ font-size:28px; margin:12px 0 18px; }
+h2{ font-size:20px; margin:0 0 12px; }
+.card{ background:var(--card); border:1px solid #242838; border-radius:16px; padding:16px; box-shadow:0 10px 30px rgba(0,0,0,.25); margin-bottom:18px; }
+.row{ display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin:8px 0; }
+.grid-2{ display:grid; grid-template-columns: 1fr; gap:16px; }
+@media(min-width:900px){ .grid-2{ grid-template-columns: 1fr 1fr; } }
+label{ display:flex; align-items:center; gap:8px; }
+input, select{ background:#0f1320; border:1px solid #22263a; color:var(--fg); padding:8px 10px; border-radius:10px; }
+.btn{ background:var(--acc); color:#fff; border:0; padding:10px 14px; border-radius:12px; cursor:pointer; text-decoration:none; display:inline-block; }
+.btn.ghost{ background:transparent; border:1px solid var(--acc); color:var(--acc); }
+.btn.danger{ background:var(--danger); }
+.btn:disabled{ opacity:.5; cursor:not-allowed; }
+video{ width:100%; max-height:45vh; background:#000; border-radius:12px; }
+progress{ width:250px; height:10px; accent-color: var(--acc); }
+.hint{ color:var(--muted); font-size:13px; }
