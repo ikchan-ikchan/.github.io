@@ -3,75 +3,66 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Classroom Canvas (Teacher / Student)</title>
+  <title>Classroom Canvas — PeerJS (GitHub Pages)</title>
   <style>
-    :root{--bg:#0b0c10;--panel:#12151b;--ink:#e8ecf1;--muted:#9aa4b2;--accent:#5bbad5;--danger:#ff5d5d}
-    html,body{height:100%;}
-    body{margin:0;background:linear-gradient(180deg,#0b0c10 0%,#0e1117 100%);color:var(--ink);font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Helvetica,Arial,sans-serif;}
-    .app{max-width:1100px;margin:0 auto;padding:16px 16px 64px;}
-    h1{font-size:22px;margin:8px 0 16px 0;letter-spacing:0.3px}
-    .card{background:var(--panel);border:1px solid rgba(255,255,255,0.08);border-radius:16px;box-shadow:0 10px 25px rgba(0,0,0,0.25);}
+    :root{--bg:#0b0c10;--panel:#12151b;--ink:#e8ecf1;--muted:#9aa4b2;--accent:#5bbad5;--danger:#ff5d5d;--ok:#2ed573}
+    html,body{height:100%}
+    body{margin:0;background:linear-gradient(180deg,#0b0c10,#0e1117);color:var(--ink);font-family:system-ui,Segoe UI,Inter,Roboto,Arial,sans-serif}
+    .app{max-width:1100px;margin:0 auto;padding:16px 16px 80px}
+    h1{font-size:20px;margin:8px 0 12px}
+    .card{background:var(--panel);border:1px solid rgba(255,255,255,.08);border-radius:16px;box-shadow:0 10px 25px rgba(0,0,0,.25)}
     .row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
     .col{flex:1 1 0}
     .pad{padding:14px}
     .muted{color:var(--muted);font-size:12px}
     .controls{display:flex;gap:10px;flex-wrap:wrap}
-    button,input,select{background:#161a22;color:var(--ink);border:1px solid rgba(255,255,255,0.12);border-radius:10px;padding:8px 10px;font-size:14px}
+    button,input,select{background:#161a22;color:var(--ink);border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:8px 10px;font-size:14px}
     button{cursor:pointer}
     button.primary{background:linear-gradient(180deg,#1f6feb,#3168ff);border-color:#2b5cff}
-    button.ghost{background:transparent;border-color:rgba(255,255,255,0.18)}
-    button.warn{background:#2a1515;border-color:#522;}
+    button.ghost{background:transparent;border-color:rgba(255,255,255,.18)}
+    button.warn{background:#2a1515;border-color:#522}
     button:disabled{opacity:.55;cursor:not-allowed}
     .grid{display:grid;grid-template-columns:1fr 340px;gap:12px}
     .stack{display:flex;flex-direction:column;gap:8px}
     .toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
     .toolbar .swatch{width:20px;height:20px;border-radius:6px;border:1px solid rgba(255,255,255,.25);cursor:pointer}
-    .pill{padding:6px 10px;border-radius:999px;background:#0f1320;border:1px solid rgba(255,255,255,0.08);font-size:12px}
+    .pill{padding:6px 10px;border-radius:999px;background:#0f1320;border:1px solid rgba(255,255,255,.08);font-size:12px}
     .mono{font-family:ui-monospace,Consolas,Menlo,Monaco,monospace;font-size:12px}
     canvas{background:#fff;border-radius:14px;border:1px solid rgba(0,0,0,.15)}
-    .hint{font-size:12px;color:var(--muted)}
-    .tabbar{display:flex;gap:6px;flex-wrap:wrap}
-    .tabbar button{padding:6px 10px;font-size:12px}
     .hr{height:1px;background:linear-gradient(90deg,transparent,rgba(255,255,255,.08),transparent);margin:8px 0}
-    .small{font-size:12px}
     .hidden{display:none}
     .w100{width:100%}
+    .overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#333;background:repeating-linear-gradient(45deg,#f7f7f7,#f7f7f7 10px,#f1f1f1 10px,#f1f1f1 20px);border-radius:14px;border:1px dashed #bbb}
+    #toast{position:fixed;bottom:14px;left:50%;transform:translateX(-50%);background:#111a;backdrop-filter:blur(6px);padding:10px 14px;border-radius:12px;border:1px solid #ffffff22;display:none;z-index:1000}
   </style>
-  <!-- PDF.js (for student & teacher rendering of PDFs) -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.3.136/pdf.min.js" integrity="sha512-A0d5Kk3U4tOoZqYdMe6pIA0w0tmHkJQ0XvF4mNQnXn8v+2Hciw2zoVzd9lG2v+8oJa8xQCJf6I9Z2s9AuiQWNA==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
-  <script>
-    // Configure PDF.js worker
-    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.3.136/pdf.worker.min.js';
-  </script>
-  <!-- Firebase (RTDB + Storage). Fill your own config object below. -->
-  <script src="https://www.gstatic.com/firebasejs/10.13.1/firebase-app-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.13.1/firebase-database-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.13.1/firebase-storage-compat.js"></script>
+  <!-- PDF.js -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.3.136/pdf.min.js" crossorigin="anonymous"></script>
+  <script>pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.3.136/pdf.worker.min.js';</script>
+  <!-- PeerJS (uses public cloud PeerServer; works on GitHub Pages) -->
+  <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
 </head>
 <body>
   <div class="app">
     <div class="row">
-      <h1 class="col">クラス用キャンバス（先生 / 生徒）</h1>
-      <div class="pill mono" id="status">offline</div>
+      <h1 class="col">クラス用キャンバス — PeerJS（GitHub Pages）</h1>
+      <div class="pill mono" id="connPill">peer: init…</div>
+      <div class="pill mono" id="rolePill">role: -</div>
+      <div class="pill mono" id="roomPill">room: -</div>
     </div>
 
-    <!-- Role select -->
     <div class="card pad" id="roleCard">
-      <div class="row">
-        <div class="col">
-          <div class="stack">
-            <div class="muted">はじめに役割を選んでください</div>
-            <div class="controls">
-              <button class="primary" id="chooseTeacher">先生として入る</button>
-              <button class="ghost" id="chooseStudent">生徒として入る</button>
-            </div>
-            <div class="hint">GitHub Pages のような静的ホスティングで動作。リアルタイム同期には Firebase Realtime Database / Storage を使います。</div>
-          </div>
+      <div class="stack">
+        <div class="muted">はじめに役割を選んでください（GitHub Pagesに置くだけでOK）</div>
+        <div class="controls">
+          <button class="primary" id="chooseTeacher">先生として入る</button>
+          <button class="ghost" id="chooseStudent">生徒として入る</button>
+          <button class="ghost" id="demoBtn">デモ用テストスライド</button>
         </div>
+        <div class="muted small">※ PeerJSのパブリック信令を使用します。学校/企業ネットワークのNATやFW設定で接続できない場合があります。</div>
       </div>
     </div>
 
-    <!-- Teacher panel -->
+    <!-- Teacher -->
     <div class="card pad hidden" id="teacherCard">
       <div class="stack">
         <div class="row">
@@ -79,46 +70,49 @@
             <label>部屋名</label>
             <input class="w100" id="tRoom" placeholder="ex) class-2A-math"/>
           </div>
-          <div class="col" style="min-width:220px;align-self:end">
+          <div class="col" style="min-width:280px;align-self:end">
             <button class="primary" id="btnStartRoom">部屋を立ち上げる</button>
+            <button id="btnEndRoom" class="ghost">切断</button>
           </div>
         </div>
+        <div class="muted" id="roomState">部屋状態: 未作成</div>
         <div class="hr"></div>
         <div class="grid">
-          <div class="card pad" style="grid-column:1/2">
-            <div class="stack">
-              <div class="toolbar">
-                <button id="btnPrev">◀︎</button>
-                <div id="pageInfo" class="pill">0 / 0</div>
-                <button id="btnNext">▶︎</button>
-                <div class="pill">ツール:</div>
-                <button id="toolPen" class="primary">ペン</button>
-                <button id="toolEraser">消しゴム</button>
-                <input type="range" id="penSize" min="2" max="24" value="6"/>
-                <div class="swatch" title="#ff4757" data-color="#ff4757" style="background:#ff4757"></div>
-                <div class="swatch" title="#2ed573" data-color="#2ed573" style="background:#2ed573"></div>
-                <div class="swatch" title="#1e90ff" data-color="#1e90ff" style="background:#1e90ff"></div>
-                <div class="swatch" title="#111" data-color="#111" style="background:#111"></div>
-                <button id="btnClear" class="warn">注釈クリア</button>
-              </div>
-              <canvas id="board" width="1280" height="720"></canvas>
-              <div class="hint">※キャンバスのベース（PDF/画像）は劣化なしで配信。注釈はベクターストロークを即時同期。</div>
+          <div style="position:relative">
+            <div class="toolbar">
+              <button id="btnPrev">◀︎</button>
+              <div id="pageInfo" class="pill">0 / 0</div>
+              <button id="btnNext">▶︎</button>
+              <div class="pill">ツール:</div>
+              <button id="toolPen" class="primary">ペン</button>
+              <button id="toolEraser">消しゴム</button>
+              <input type="range" id="penSize" min="2" max="24" value="6"/>
+              <div class="swatch" title="#ff4757" data-color="#ff4757" style="background:#ff4757"></div>
+              <div class="swatch" title="#2ed573" data-color="#2ed573" style="background:#2ed573"></div>
+              <div class="swatch" title="#1e90ff" data-color="#1e90ff" style="background:#1e90ff"></div>
+              <div class="swatch" title="#111" data-color="#111" style="background:#111"></div>
+              <button id="btnClear" class="warn">注釈クリア</button>
             </div>
+            <div style="position:relative">
+              <canvas id="board" width="1280" height="720"></canvas>
+              <div id="noBaseOverlay" class="overlay hidden">ベース（PDF/画像）が未表示です。右側で読み込んでください。</div>
+            </div>
+            <div class="hint muted">ベースは**原本無劣化**でP2P配布。注釈はベクトルをリアルタイム送信。</div>
           </div>
-          <div class="stack" style="grid-column:2/3">
+          <div class="stack">
             <div class="card pad">
               <div class="stack">
                 <div class="muted">ベースを選択</div>
                 <div class="controls">
-                  <input type="file" id="filePick" accept=".pdf,image/*,.ppt,.pptx"/>
-                  <button id="btnUseCamera">カメラから取り込み（テキスト強調）</button>
+                  <input type="file" id="filePick" accept="application/pdf,.pdf,image/*,.ppt,.pptx"/>
+                  <button id="btnUseCamera">カメラ取り込み（紙白/文字色 強調）</button>
                 </div>
-                <div class="small muted">PowerPoint は PDF へエクスポートしてから読み込み推奨（静的ホスティングのため）。</div>
+                <div class="small muted">PowerPointはPDFへエクスポートしてから取り込み推奨（Pagesはサーバ処理不可のため）。</div>
                 <div class="hr"></div>
                 <div class="stack">
-                  <div class="muted">テキスト強調（画像/カメラ取込時）</div>
-                  <label class="small"><input type="checkbox" id="enhanceToggle" checked /> 自動二値化（Otsu）で紙を白、文字を色で塗りつぶし</label>
-                  <label class="small">しきい値調整 <input type="range" id="threshRange" min="0" max="255" value="-1"> <span id="threshLabel">auto</span></label>
+                  <div class="muted">テキスト強調（画像/カメラ時）</div>
+                  <label class="small"><input type="checkbox" id="enhanceToggle" checked /> 自動二値化（Otsu）</label>
+                  <label class="small">しきい値 <input type="range" id="threshRange" min="0" max="255" value="-1"> <span id="threshLabel">auto</span></label>
                   <label class="small">文字色 <input type="color" id="inkColor" value="#0033cc"/></label>
                 </div>
               </div>
@@ -127,7 +121,7 @@
               <div class="stack">
                 <div class="muted">共有リンク</div>
                 <input id="shareUrl" class="w100" readonly />
-                <div class="hint">この URL と部屋名を生徒に伝えてください。</div>
+                <div class="hint">このURL（ハッシュ付）と部屋名を生徒に伝えてください。</div>
               </div>
             </div>
           </div>
@@ -135,7 +129,7 @@
       </div>
     </div>
 
-    <!-- Student panel -->
+    <!-- Student -->
     <div class="card pad hidden" id="studentCard">
       <div class="stack">
         <div class="row">
@@ -145,417 +139,204 @@
           </div>
           <div class="col" style="min-width:220px;align-self:end">
             <button class="primary" id="btnJoin">入室</button>
+            <button id="btnLeave" class="ghost">切断</button>
           </div>
         </div>
+        <div class="muted" id="joinState">未入室</div>
         <div class="hr"></div>
         <div class="stack">
-          <div class="toolbar">
-            <div id="sPageInfo" class="pill">0 / 0</div>
+          <div class="toolbar"><div id="sPageInfo" class="pill">0 / 0</div></div>
+          <div style="position:relative">
+            <canvas id="sBoard" width="1280" height="720"></canvas>
+            <div id="sNoBaseOverlay" class="overlay">先生がベースを表示するとここに出ます</div>
           </div>
-          <canvas id="sBoard" width="1280" height="720"></canvas>
         </div>
       </div>
     </div>
   </div>
+  <div id="toast" class="mono"></div>
 
 <script>
-/********************
- * 1) Firebase setup
- ********************/
-// ❶ Fill YOUR Firebase config here
-const firebaseConfig = {
-  apiKey: "YOUR_API_KEY",
-  authDomain: "YOUR_PROJECT.firebaseapp.com",
-  databaseURL: "https://YOUR_PROJECT-default-rtdb.firebaseio.com",
-  projectId: "YOUR_PROJECT",
-  storageBucket: "YOUR_PROJECT.appspot.com",
-  messagingSenderId: "",
-  appId: ""
-};
-
-// Initialize app (won't error if placeholders; offline mode)
-let appFB, db, storage;
-try {
-  appFB = firebase.initializeApp(firebaseConfig);
-  db = firebase.database();
-  storage = firebase.storage();
-  document.getElementById('status').textContent = 'online';
-} catch(e){
-  console.warn('Firebase init warning:', e);
-  document.getElementById('status').textContent = 'offline';
-}
-
-/********************
- * 2) DOM helpers
- ********************/
-const $ = sel => document.querySelector(sel);
-const on = (el, ev, fn) => el.addEventListener(ev, fn);
-const sleep = ms => new Promise(r=>setTimeout(r,ms));
-
-/********************
- * 3) Global State
- ********************/
-let role = null; // 'teacher' | 'student'
-let room = null;
-let pdfDoc = null; // teacher or student PDF.js doc
-let slides = []; // array of slide descriptors {type:'pdf'|'image', url, page?}
-let currentIndex = 0;
-let drawingState = { tool:'pen', color:'#1e90ff', size:6 };
-let isDrawing = false; let lastPt = null;
-
-/********************
- * 4) Role selection UI
- ********************/
-const roleCard = $('#roleCard');
-on($('#chooseTeacher'),'click',()=>{
-  role = 'teacher';
-  roleCard.classList.add('hidden');
-  $('#teacherCard').classList.remove('hidden');
-  $('#shareUrl').value = location.href.split('#')[0];
-});
-
-on($('#chooseStudent'),'click',()=>{
-  role = 'student';
-  roleCard.classList.add('hidden');
-  $('#studentCard').classList.remove('hidden');
-});
-
-/********************
- * 5) Canvas contexts
- ********************/
-const board = $('#board');
-const bctx = board.getContext('2d');
-const sBoard = $('#sBoard');
-const sctx = sBoard.getContext('2d');
-
+/************************
+ * Quick DOM helpers
+ ************************/ 
+const $ = s=>document.querySelector(s); const on=(el,ev,fn)=>el.addEventListener(ev,fn);
+function toast(msg, ms=1800){ const t=$('#toast'); t.textContent=msg; t.style.display='block'; setTimeout(()=>t.style.display='none', ms); }
 function clearCanvas(ctx){ ctx.clearRect(0,0,ctx.canvas.width,ctx.canvas.height); }
+function updatePills(){ $('#rolePill').textContent='role: '+(role||'-'); $('#roomPill').textContent='room: '+(room||'-'); }
 
-/********************
- * 6) PDF & Image rendering
- ********************/
-async function renderSlideTo(ctx, slide){
-  clearCanvas(ctx);
-  if(!slide){return}
-  if(slide.type==='image'){
-    await new Promise((res)=>{
-      const img = new Image(); img.crossOrigin='anonymous'; img.onload=()=>{
-        // Fit contain
-        const r = Math.min(ctx.canvas.width/img.width, ctx.canvas.height/img.height);
-        const w = img.width*r, h = img.height*r;
-        const x = (ctx.canvas.width - w)/2; const y=(ctx.canvas.height-h)/2;
-        ctx.drawImage(img, x,y,w,h);
-        res();
-      }; img.src = slide.url;
+/************************
+ * Global state
+ ************************/ 
+let role=null, room=null; let slides=[]; let currentIndex=0; let pdfDocCache={};
+let drawingState={tool:'pen',color:'#1e90ff',size:6}; let isDrawing=false; let liveStroke=null; let opsCache={};
+let lastFileMeta=null, lastFileBuffer=null; // for late joiners
+
+const board=$('#board'), bctx=board?.getContext('2d');
+const sBoard=$('#sBoard'), sctx=sBoard?.getContext('2d');
+
+/************************
+ * PeerJS (host & client)
+ ************************/ 
+let hostPeer=null, conns=[]; let guestPeer=null, hostConn=null; const connPill=$('#connPill');
+function setPeerStatus(txt,color){ connPill.textContent=txt; if(color) connPill.style.borderColor=color; }
+
+function hostIdFromRoom(r){ return `classboard-${encodeURIComponent(r)}-host`; }
+
+async function startHost(roomName){
+  const id = hostIdFromRoom(roomName);
+  hostPeer = new Peer(id, { debug: 2 });
+  setPeerStatus('peer: connecting…','#ffb84d');
+  hostPeer.on('open', pid=>{ setPeerStatus('host: '+pid,'#2ed573'); toast('部屋を立ち上げました'); });
+  hostPeer.on('error', err=>{ console.error(err); setPeerStatus('peer error','#ff5d5d'); toast('Peerエラー: '+err.type); });
+  hostPeer.on('connection', conn=>{
+    conns.push(conn);
+    conn.on('open', ()=>{
+      toast('参加者が接続');
+      // 初期同期：ページ番号と現行ページの注釈
+      const init={type:'sync:init', currentIndex};
+      conn.send(init);
+      // スライド原本も送り直す
+      if(lastFileMeta && lastFileBuffer){ sendArrayBufferToConn(conn, lastFileMeta, lastFileBuffer); }
+      // 現行ページの既存ops
+      const ops = opsCache[currentIndex]||{}; for(const [id,op] of Object.entries(ops)){ conn.send({type:'ops:add', index: currentIndex, id, op}); }
+      // 現行スライドの宣言（受信側はfile完了後に描画）
+      conn.send({type:'nav:set', index: currentIndex});
     });
-  } else if(slide.type==='pdf'){
-    const doc = slide._doc || (slide._doc = await pdfjsLib.getDocument(slide.url).promise);
-    const page = await doc.getPage(slide.page||1);
-    const viewport = page.getViewport({scale:1});
-    const scale = Math.min(ctx.canvas.width/viewport.width, ctx.canvas.height/viewport.height);
-    const v2 = page.getViewport({scale});
-    const tmp = document.createElement('canvas'); tmp.width=v2.width; tmp.height=v2.height;
-    await page.render({canvasContext: tmp.getContext('2d'), viewport: v2}).promise;
-    const x=(ctx.canvas.width-v2.width)/2, y=(ctx.canvas.height-v2.height)/2;
-    ctx.drawImage(tmp,x,y);
-  }
-}
-
-function updatePageInfo(){
-  $('#pageInfo').textContent = `${slides.length? currentIndex+1:0} / ${slides.length}`;
-  $('#sPageInfo').textContent = `${slides.length? currentIndex+1:0} / ${slides.length}`;
-}
-
-/********************
- * 7) Teacher: start room & upload base
- ********************/
-async function ensureRoomStructure(name){
-  if(!db) return;
-  const baseRef = db.ref(`rooms/${name}`);
-  await baseRef.child('meta').set({ createdAt: Date.now() });
-  // init
-  await baseRef.child('slides').set([]);
-  await baseRef.child('current').set(0);
-  await baseRef.child('ops').set({}); // ops/{slideIndex}/{opId} = op
-}
-
-async function uploadToStorage(file, path){
-  if(!storage) { return {url: URL.createObjectURL(file)} } // offline fallback
-  const ref = storage.ref().child(path);
-  await ref.put(file);
-  const url = await ref.getDownloadURL();
-  return {url};
-}
-
-async function teacherSetSlides(slideArray){
-  slides = slideArray;
-  currentIndex = 0;
-  updatePageInfo();
-  await renderSlideTo(bctx, slides[0]);
-  if(!db || !room) return;
-  // Save slides metadata to RTDB (students will fetch URLs directly)
-  await db.ref(`rooms/${room}/slides`).set(slides.map(s=>({type:s.type,url:s.url,page:s.page||1})));
-  await db.ref(`rooms/${room}/current`).set(0);
-}
-
-// File picker handler
-on($('#filePick'),'change', async (e)=>{
-  const file = e.target.files[0]; if(!file || !room) return;
-  const ext = file.name.split('.').pop().toLowerCase();
-  if(ext==='pdf'){
-    const path = `rooms/${room}/base/${Date.now()}-${file.name}`;
-    const {url} = await uploadToStorage(file, path);
-    // Load PDF to count pages
-    const doc = await pdfjsLib.getDocument(url).promise;
-    const arr = [];
-    const count = doc.numPages;
-    for(let i=1;i<=count;i++) arr.push({type:'pdf', url, page:i});
-    await teacherSetSlides(arr);
-  } else if(['png','jpg','jpeg','webp','bmp'].includes(ext)){
-    // Optional enhancement
-    let blob = file;
-    if($('#enhanceToggle').checked){
-      blob = await enhanceImageFile(file, $('#inkColor').value, parseInt($('#threshRange').value,10));
-    }
-    const path = `rooms/${room}/base/${Date.now()}-${file.name}`;
-    const {url} = await uploadToStorage(blob, path);
-    await teacherSetSlides([{type:'image', url}]);
-  } else if(['ppt','pptx'].includes(ext)){
-    alert('PowerPoint は PDF へエクスポートしてから読み込んでください。');
-  } else {
-    alert('未対応のファイル形式です');
-  }
-});
-
-// Camera capture & enhance
-on($('#btnUseCamera'),'click', async ()=>{
-  if(!room) return alert('先に部屋を立ち上げてください');
-  const stream = await navigator.mediaDevices.getUserMedia({video:true});
-  const video = document.createElement('video'); video.srcObject = stream; await video.play();
-  // Simple modal-ish prompt
-  const shot = await new Promise(res=>{
-    const dlg = document.createElement('div');
-    dlg.style.position='fixed'; dlg.style.inset='0'; dlg.style.background='rgba(0,0,0,.8)'; dlg.style.display='grid'; dlg.style.placeItems='center';
-    const inner = document.createElement('div'); inner.className='card pad'; inner.style.width='min(90vw,900px)';
-    inner.appendChild(video);
-    const row = document.createElement('div'); row.className='row';
-    const b1 = document.createElement('button'); b1.className='primary'; b1.textContent='撮影';
-    const b2 = document.createElement('button'); b2.textContent='キャンセル';
-    row.appendChild(b1); row.appendChild(b2); inner.appendChild(row); dlg.appendChild(inner);
-    document.body.appendChild(dlg);
-    b1.onclick=()=>{res(true);}; b2.onclick=()=>{res(false);};
-  }).finally(()=>{});
-  const track = stream.getTracks()[0];
-  let blob = null;
-  if(shot){
-    const c = document.createElement('canvas'); c.width = 1920; c.height = Math.round(1920*(video.videoHeight/video.videoWidth));
-    const cctx = c.getContext('2d'); cctx.drawImage(video,0,0,c.width,c.height);
-    // enhance
-    const dataUrl = await enhanceImageCanvas(c, $('#inkColor').value, parseInt($('#threshRange').value,10));
-    blob = await (await fetch(dataUrl)).blob();
-  }
-  track.stop();
-  document.querySelectorAll('video').forEach(v=>v.remove());
-  document.querySelectorAll('div').forEach(d=>{ if(d.style && d.style.position==='fixed') d.remove();});
-  if(blob){
-    const path = `rooms/${room}/base/${Date.now()}-camera.png`;
-    const {url} = await uploadToStorage(blob, path);
-    await teacherSetSlides([{type:'image', url}]);
-  }
-});
-
-// Start room
-on($('#btnStartRoom'),'click', async()=>{
-  const name = $('#tRoom').value.trim(); if(!name) return alert('部屋名を入力');
-  room = name;
-  $('#shareUrl').value = location.origin + location.pathname + `#${encodeURIComponent(room)}`;
-  history.replaceState(null,'',`#${encodeURIComponent(room)}`);
-  if(db){
-    await ensureRoomStructure(room);
-  }
-  attachTeacherRealtime();
-});
-
-function attachTeacherRealtime(){
-  if(!db || !room) return;
-  // listeners for external changes (e.g., another teacher client)
-  db.ref(`rooms/${room}/current`).on('value', async snap=>{
-    const v = snap.val(); if(typeof v==='number' && v !== currentIndex){ currentIndex=v; await renderSlideTo(bctx, slides[currentIndex]); updatePageInfo(); redrawOpsOn(bctx); }
-  });
-  // preload existing slide set
-  db.ref(`rooms/${room}/slides`).on('value', async snap=>{
-    const arr = snap.val()||[]; slides = arr; await renderSlideTo(bctx, slides[currentIndex]||null); updatePageInfo(); redrawOpsOn(bctx);
+    conn.on('close', ()=>{ conns = conns.filter(c=>c!==conn); });
+    conn.on('data', msg=>{ /* ここで生徒からの要求を処理可 */ });
   });
 }
 
-/********************
- * 8) Student: join & realtime rendering
- ********************/
-on($('#btnJoin'),'click', async()=>{
-  const name = ($('#sRoom').value||location.hash.slice(1)).trim(); if(!name) return alert('部屋名を入力');
-  room = name; history.replaceState(null,'',`#${encodeURIComponent(room)}`);
-  attachStudentRealtime();
-});
+function stopHost(){ try{ conns.forEach(c=>c.close()); conns=[]; hostPeer && hostPeer.destroy(); }catch(_){} hostPeer=null; setPeerStatus('peer: idle','#999'); }
 
-window.addEventListener('load',()=>{
-  const hashRoom = decodeURIComponent(location.hash.slice(1)||'');
-  if(hashRoom){ $('#sRoom').value = hashRoom; }
-});
+function broadcast(msg){ for(const c of conns){ try{ c.open && c.send(msg); }catch(_){ /* ignore */ } } }
 
-function attachStudentRealtime(){
-  if(!db || !room) return;
-  db.ref(`rooms/${room}/slides`).on('value', async snap=>{
-    const arr = snap.val()||[]; slides = arr; currentIndex = 0; await renderSlideTo(sctx, slides[0]||null); updatePageInfo(); redrawOpsOn(sctx);
+async function joinRoom(roomName){
+  guestPeer = new Peer(undefined, { debug: 2 });
+  setPeerStatus('peer: connecting…','#ffb84d');
+  guestPeer.on('open', gid=>{
+    const hostId = hostIdFromRoom(roomName);
+    hostConn = guestPeer.connect(hostId);
+    hostConn.on('open', ()=>{ setPeerStatus('client: connected','#2ed573'); toast('入室しました'); hostConn.send({type:'hello'}); });
+    hostConn.on('data', handleHostMessage);
+    hostConn.on('close', ()=>{ setPeerStatus('client: closed','#999'); $('#joinState').textContent='切断'; });
   });
-  db.ref(`rooms/${room}/current`).on('value', async snap=>{
-    const idx = snap.val(); if(typeof idx==='number'){ currentIndex=idx; await renderSlideTo(sctx, slides[currentIndex]||null); updatePageInfo(); redrawOpsOn(sctx); }
-  });
-  db.ref(`rooms/${room}/ops`).on('value', snap=>{
-    // full redraw of ops when any change (simple and robust)
-    opsCache = snap.val()||{}; redrawOpsOn(sctx);
-  });
+  guestPeer.on('error', err=>{ console.error(err); setPeerStatus('peer error','#ff5d5d'); toast('Peerエラー: '+err.type); });
 }
+function leaveRoom(){ try{ hostConn && hostConn.close(); guestPeer && guestPeer.destroy(); }catch(_){} hostConn=null; guestPeer=null; setPeerStatus('peer: idle','#999'); }
 
-/********************
- * 9) Navigation
- ********************/
-on($('#btnPrev'),'click', async()=>{
-  if(currentIndex>0){ currentIndex--; await renderSlideTo(bctx, slides[currentIndex]); updatePageInfo(); publishCurrent(); }
-});
+/************************
+ * Slides render helpers
+ ************************/ 
+async function renderSlideTo(ctx, slide){ if(!ctx) return; clearCanvas(ctx); if(!slide) return; if(slide.type==='image'){ await new Promise((res,rej)=>{ const img=new Image(); img.crossOrigin='anonymous'; img.onload=()=>{ const r=Math.min(ctx.canvas.width/img.width, ctx.canvas.height/img.height); const w=img.width*r,h=img.height*r; const x=(ctx.canvas.width-w)/2, y=(ctx.canvas.height-h)/2; ctx.drawImage(img,x,y,w,h); res();}; img.onerror=rej; img.src=slide.url;}); } else if(slide.type==='pdf'){ const key=slide.url; let doc=pdfDocCache[key]; if(!doc){ doc=await pdfjsLib.getDocument(slide.url).promise; pdfDocCache[key]=doc; } const page=await doc.getPage(slide.page||1); const vp=page.getViewport({scale:1}); const scale=Math.min(ctx.canvas.width/vp.width, ctx.canvas.height/vp.height); const v2=page.getViewport({scale}); const tmp=document.createElement('canvas'); tmp.width=v2.width; tmp.height=v2.height; await page.render({canvasContext: tmp.getContext('2d'), viewport: v2}).promise; const x=(ctx.canvas.width-v2.width)/2, y=(ctx.canvas.height-v2.height)/2; ctx.drawImage(tmp,x,y); } }
+function updatePageInfo(){ $('#pageInfo')?.textContent=`${slides.length? currentIndex+1:0} / ${slides.length}`; $('#sPageInfo')?.textContent=`${slides.length? currentIndex+1:0} / ${slides.length}`; }
 
-on($('#btnNext'),'click', async()=>{
-  if(currentIndex < slides.length-1){ currentIndex++; await renderSlideTo(bctx, slides[currentIndex]); updatePageInfo(); publishCurrent(); }
-});
+/************************
+ * Teacher UI
+ ************************/ 
+on($('#chooseTeacher'),'click',()=>{ role='teacher'; $('#roleCard').classList.add('hidden'); $('#teacherCard').classList.remove('hidden'); updatePills(); });
 
-async function publishCurrent(){ if(db && room){ await db.ref(`rooms/${room}/current`).set(currentIndex); } redrawOpsOn(bctx); }
+$('#btnStartRoom').onclick = async ()=>{
+  const name=$('#tRoom').value.trim(); if(!name) return alert('部屋名を入力'); room=name; updatePills(); $('#shareUrl').value=location.origin+location.pathname+`#${encodeURIComponent(room)}`; history.replaceState(null,'',`#${encodeURIComponent(room)}`); await startHost(room); $('#roomState').textContent='部屋状態: 作成・待受中'; $('#noBaseOverlay').classList.remove('hidden'); };
+$('#btnEndRoom').onclick = ()=>{ stopHost(); room=null; updatePills(); $('#roomState').textContent='部屋状態: 未作成'; toast('切断しました'); };
 
-/********************
- * 10) Annotation (vector ops)
- ********************/
-let opsCache = {}; // {slideIndex:{opId: op}}
+$('#filePick').onchange = async (e)=>{ const f=e.target.files[0]; if(!f) return; if(!room || !hostPeer) return alert('先に部屋を立ち上げてください'); const ext=f.name.split('.').pop().toLowerCase(); if(['ppt','pptx'].includes(ext)){ alert('PowerPointはPDFへエクスポートしてから読み込んでください'); return; } await teacherSetSlidesFromFile(f); };
 
-function opRef(idx){ return db.ref(`rooms/${room}/ops/${idx}`); }
+$('#btnPrev').onclick = async ()=>{ if(currentIndex>0){ currentIndex--; await renderSlideTo(bctx, slides[currentIndex]); updatePageInfo(); broadcast({type:'nav:set', index: currentIndex}); } };
+$('#btnNext').onclick = async ()=>{ if(currentIndex<slides.length-1){ currentIndex++; await renderSlideTo(bctx, slides[currentIndex]); updatePageInfo(); broadcast({type:'nav:set', index: currentIndex}); } };
 
-function redrawOpsOn(ctx){
-  // re-render base then all ops for currentIndex
-  const slide = slides[currentIndex]; if(!slide) return;
-  // base is already rendered outside; here draw ops on top
-  const list = (opsCache[currentIndex]) ? Object.values(opsCache[currentIndex]) : [];
-  ctx.save();
-  list.sort((a,b)=>a.t-b.t).forEach(op=>{
-    if(op.kind==='stroke') drawStroke(ctx, op);
-    else if(op.kind==='clear') { ctx.clearRect(0,0,ctx.canvas.width,ctx.canvas.height); renderSlideTo(ctx, slide); }
-  });
-  ctx.restore();
-}
-
-function drawStroke(ctx, op){
-  ctx.save();
-  if(op.mode==='eraser'){
-    ctx.globalCompositeOperation = 'destination-out';
-    ctx.strokeStyle = 'rgba(0,0,0,1)';
-  } else {
-    ctx.globalCompositeOperation = 'source-over';
-    ctx.strokeStyle = op.color;
-  }
-  ctx.lineWidth = op.size; ctx.lineJoin='round'; ctx.lineCap='round';
-  ctx.beginPath();
-  const pts = op.pts;
-  if(!pts || pts.length===0) return;
-  ctx.moveTo(pts[0].x, pts[0].y);
-  for(let i=1;i<pts.length;i++){ ctx.lineTo(pts[i].x, pts[i].y); }
-  ctx.stroke();
-  ctx.restore();
-}
-
-function canvasPoint(e, canvas){
-  const rect = canvas.getBoundingClientRect();
-  const x = (e.touches? e.touches[0].clientX : e.clientX) - rect.left;
-  const y = (e.touches? e.touches[0].clientY : e.clientY) - rect.top;
-  return {x: Math.max(0, Math.min(canvas.width, x * (canvas.width/rect.width))), y: Math.max(0, Math.min(canvas.height, y * (canvas.height/rect.height)))};
-}
-
-let liveStroke = null; // {pts:[]}
-['mousedown','touchstart'].forEach(ev=>on(board,ev,(e)=>{
-  if(role!=='teacher') return;
-  if(!slides[currentIndex]) return;
-  isDrawing=true; lastPt = canvasPoint(e, board);
-  liveStroke = {kind:'stroke', mode:(drawingState.tool==='eraser'?'eraser':'pen'), color:drawingState.color, size:drawingState.size, pts:[lastPt], t: Date.now()};
-  drawStroke(bctx, liveStroke);
-  e.preventDefault();
-}));
-['mousemove','touchmove'].forEach(ev=>on(board,ev,(e)=>{
-  if(!isDrawing || role!=='teacher') return;
-  const p = canvasPoint(e, board); if(!liveStroke) return;
-  const lp = liveStroke.pts[liveStroke.pts.length-1];
-  const dx=p.x-lp.x, dy=p.y-lp.y; const distSq = dx*dx+dy*dy; if(distSq<1.5) { e.preventDefault(); return; }
-  liveStroke.pts.push(p);
-  // draw incrementally
-  bctx.save();
-  if(liveStroke.mode==='eraser'){ bctx.globalCompositeOperation='destination-out'; bctx.strokeStyle='rgba(0,0,0,1)'; }
-  else { bctx.globalCompositeOperation='source-over'; bctx.strokeStyle=liveStroke.color; }
-  bctx.lineWidth=liveStroke.size; bctx.lineJoin='round'; bctx.lineCap='round';
-  bctx.beginPath(); bctx.moveTo(lp.x,lp.y); bctx.lineTo(p.x,p.y); bctx.stroke(); bctx.restore();
-  e.preventDefault();
-}));
-['mouseup','mouseleave','touchend','touchcancel'].forEach(ev=>on(board,ev,async (e)=>{
-  if(!isDrawing || role!=='teacher') return;
-  isDrawing=false;
-  if(liveStroke && db && room){
-    const id = db.ref().push().key; await opRef(currentIndex).child(id).set(liveStroke);
-  }
-  liveStroke=null; lastPt=null;
-  e.preventDefault();
-}));
-
-on($('#btnClear'),'click', async ()=>{
-  if(role!=='teacher') return;
-  clearCanvas(bctx); await renderSlideTo(bctx, slides[currentIndex]);
-  if(db && room){ const id = db.ref().push().key; await opRef(currentIndex).child(id).set({kind:'clear', t:Date.now()}); }
-});
-
-// Tool UI
+// Drawing
 on($('#toolPen'),'click',()=>{ drawingState.tool='pen'; $('#toolPen').classList.add('primary'); $('#toolEraser').classList.remove('primary'); });
 on($('#toolEraser'),'click',()=>{ drawingState.tool='eraser'; $('#toolEraser').classList.add('primary'); $('#toolPen').classList.remove('primary'); });
-$('.swatch[data-color="#1e90ff"]').classList.add('selected');
 Array.from(document.querySelectorAll('.swatch')).forEach(el=> on(el,'click',()=>{ drawingState.color=el.dataset.color; }));
-on($('#penSize'),'input',e=> drawingState.size = +e.target.value);
+$('#penSize').oninput = e=> drawingState.size=+e.target.value;
 
-/********************
- * 11) Image enhancement (paper white & text colored)
- ********************/
-async function enhanceImageFile(file, inkColor, thresh){
-  const bmp = await createImageBitmap(file);
-  const c = new OffscreenCanvas(bmp.width, bmp.height);
-  const ctx = c.getContext('2d'); ctx.drawImage(bmp,0,0);
-  const dataUrl = await enhanceImageCanvas(c, inkColor, thresh);
-  return (await fetch(dataUrl)).blob();
+function canvasPoint(e,canvas){ const r=canvas.getBoundingClientRect(); const x=(e.touches?e.touches[0].clientX:e.clientX)-r.left; const y=(e.touches?e.touches[0].clientY:e.clientY)-r.top; return {x: Math.max(0, Math.min(canvas.width, x*(canvas.width/r.width))), y: Math.max(0, Math.min(canvas.height, y*(canvas.height/r.height)))}; }
+
+['mousedown','touchstart'].forEach(ev=> on(board,ev,(e)=>{ if(role!=='teacher') return; if(!slides[currentIndex]){ toast('まずベースを表示してください'); return; } isDrawing=true; const p=canvasPoint(e,board); liveStroke={kind:'stroke',mode:(drawingState.tool==='eraser'?'eraser':'pen'),color:drawingState.color,size:drawingState.size,pts:[p],t:Date.now()}; drawStroke(bctx, liveStroke); e.preventDefault(); }));
+['mousemove','touchmove'].forEach(ev=> on(board,ev,(e)=>{ if(!isDrawing||role!=='teacher'||!liveStroke) return; const p=canvasPoint(e,board); const lp=liveStroke.pts[liveStroke.pts.length-1]; const dx=p.x-lp.x,dy=p.y-lp.y; if(dx*dx+dy*dy<1.0){ e.preventDefault(); return;} liveStroke.pts.push(p); bctx.save(); if(liveStroke.mode==='eraser'){ bctx.globalCompositeOperation='destination-out'; bctx.strokeStyle='rgba(0,0,0,1)'; } else { bctx.globalCompositeOperation='source-over'; bctx.strokeStyle=liveStroke.color; } bctx.lineWidth=liveStroke.size; bctx.lineJoin='round'; bctx.lineCap='round'; bctx.beginPath(); bctx.moveTo(lp.x,lp.y); bctx.lineTo(p.x,p.y); bctx.stroke(); bctx.restore(); e.preventDefault(); }));
+['mouseup','mouseleave','touchend','touchcancel'].forEach(ev=> on(board,ev, async (e)=>{ if(!isDrawing||role!=='teacher') return; isDrawing=false; if(liveStroke){ const id='op_'+Date.now()+Math.random().toString(36).slice(2,7); opsCache[currentIndex]=opsCache[currentIndex]||{}; opsCache[currentIndex][id]=liveStroke; redrawOpsOn(bctx); broadcast({type:'ops:add', index: currentIndex, id, op: liveStroke}); } liveStroke=null; e.preventDefault(); }));
+
+$('#btnClear').onclick = async ()=>{ if(role!=='teacher') return; if(!slides[currentIndex]) return; clearCanvas(bctx); await renderSlideTo(bctx, slides[currentIndex]); const op={kind:'clear',t:Date.now()}; const id='op_'+Date.now(); opsCache[currentIndex]=opsCache[currentIndex]||{}; opsCache[currentIndex][id]=op; redrawOpsOn(bctx); broadcast({type:'ops:add', index: currentIndex, id, op}); };
+
+function drawStroke(ctx,op){ ctx.save(); if(op.mode==='eraser'){ ctx.globalCompositeOperation='destination-out'; ctx.strokeStyle='rgba(0,0,0,1)'; } else { ctx.globalCompositeOperation='source-over'; ctx.strokeStyle=op.color; } ctx.lineWidth=op.size; ctx.lineJoin='round'; ctx.lineCap='round'; ctx.beginPath(); const pts=op.pts||[]; if(pts.length===0){ ctx.restore(); return; } ctx.moveTo(pts[0].x,pts[0].y); for(let i=1;i<pts.length;i++) ctx.lineTo(pts[i].x,pts[i].y); ctx.stroke(); ctx.restore(); }
+function redrawOpsOn(ctx){ if(!ctx) return; const slide=slides[currentIndex]; if(!slide) return; const list=(opsCache[currentIndex])? Object.values(opsCache[currentIndex]) : []; ctx.save(); list.sort((a,b)=>a.t-b.t).forEach(op=>{ if(op.kind==='stroke') drawStroke(ctx,op); if(op.kind==='clear'){ ctx.clearRect(0,0,ctx.canvas.width,ctx.canvas.height); renderSlideTo(ctx, slide); } }); ctx.restore(); }
+
+/************************
+ * Send base file to students (unchanged quality)
+ ************************/ 
+async function teacherSetSlidesFromFile(file){
+  // Local preview for teacher
+  const ext=file.name.split('.').pop().toLowerCase();
+  const localUrl = URL.createObjectURL(file);
+  if(ext==='pdf'){ const doc=await pdfjsLib.getDocument(localUrl).promise; const arr=[]; for(let i=1;i<=doc.numPages;i++) arr.push({type:'pdf',url:localUrl,page:i}); slides=arr; } else { slides=[{type:'image',url:localUrl}]; }
+  currentIndex=0; await renderSlideTo(bctx, slides[0]); updatePageInfo(); $('#noBaseOverlay').classList.toggle('hidden', slides.length>0);
+  // Cache for new joiners
+  lastFileMeta={name:file.name,type:file.type,size:file.size}; lastFileBuffer=await file.arrayBuffer();
+  // Distribute to students
+  await sendArrayBufferToAll(lastFileMeta, lastFileBuffer);
 }
 
-async function enhanceImageCanvas(canvasLike, inkColor, thresh){
-  const w = canvasLike.width, h = canvasLike.height;
-  const c = canvasLike instanceof HTMLCanvasElement ? canvasLike : (()=>{ const cv=document.createElement('canvas'); cv.width=w; cv.height=h; const cx=cv.getContext('2d'); cx.drawImage(canvasLike,0,0); return cv; })();
-  const ctx = c.getContext('2d');
-  const img = ctx.getImageData(0,0,w,h); const d = img.data;
-  // 1) grayscale & histogram
-  const hist = new Uint32Array(256);
-  for(let i=0;i<d.length;i+=4){ const g = (d[i]*0.2126 + d[i+1]*0.7152 + d[i+2]*0.0722)|0; d[i]=d[i+1]=d[i+2]=g; hist[g]++; }
-  // 2) Otsu threshold if thresh<0
-  let T = thresh; if(!(T>=0 && T<=255)){
-    const total = w*h; let sum=0; for(let i=0;i<256;i++) sum += i*hist[i]; let sumB=0,wB=0,maxVar=0,t=0;
-    for(let i=0;i<256;i++){ wB += hist[i]; if(wB===0) continue; const wF = total-wB; if(wF===0) break; sumB += i*hist[i]; const mB=sumB/wB, mF=(sum-sumB)/wF; const between = wB*wF*(mB-mF)*(mB-mF); if(between>maxVar){ maxVar=between; t=i; } }
-    T=t;
+function sendArrayBufferToAll(meta, buffer){ for(const c of conns){ if(!c.open) continue; sendArrayBufferToConn(c, meta, buffer); } toast('原本ファイルを配布中…'); }
+function sendArrayBufferToConn(conn, meta, buffer){ try{ conn.send({type:'file:meta', meta}); const chunkSize=64*1024; for(let off=0; off<buffer.byteLength; off+=chunkSize){ const chunk=buffer.slice(off, Math.min(off+chunkSize, buffer.byteLength)); conn.send({type:'file:chunk', data: chunk}); } conn.send({type:'file:end'}); }catch(e){ console.warn('send error',e); } }
+
+/************************
+ * Camera capture & enhancement
+ ************************/ 
+$('#btnUseCamera').onclick = async ()=>{
+  if(!room || !hostPeer) return alert('先に部屋を立ち上げてください');
+  const stream = await navigator.mediaDevices.getUserMedia({video:true}); const video=document.createElement('video'); video.srcObject=stream; await video.play();
+  const shot = await new Promise(res=>{ const dlg=document.createElement('div'); dlg.style.position='fixed'; dlg.style.inset='0'; dlg.style.background='rgba(0,0,0,.8)'; dlg.style.display='grid'; dlg.style.placeItems='center'; const inner=document.createElement('div'); inner.className='card pad'; inner.style.width='min(90vw,900px)'; inner.appendChild(video); const row=document.createElement('div'); row.className='row'; const b1=document.createElement('button'); b1.className='primary'; b1.textContent='撮影'; const b2=document.createElement('button'); b2.textContent='キャンセル'; row.append(b1,b2); inner.append(row); dlg.append(inner); document.body.append(dlg); b1.onclick=()=>res(true); b2.onclick=()=>res(false); });
+  const track=stream.getTracks()[0]; let blob=null;
+  if(shot){ const c=document.createElement('canvas'); c.width=1920; c.height=Math.round(1920*(video.videoHeight/video.videoWidth)); const cx=c.getContext('2d'); cx.drawImage(video,0,0,c.width,c.height); const dataUrl=await enhanceImageCanvas(c,$('#inkColor').value, parseInt($('#threshRange').value,10)); blob = await (await fetch(dataUrl)).blob(); }
+  track.stop(); document.querySelectorAll('video').forEach(v=>v.remove()); document.querySelectorAll('div').forEach(d=>{ if(d.style && d.style.position==='fixed') d.remove();});
+  if(blob){ const file = new File([blob], `camera-${Date.now()}.png`, {type:'image/png'}); await teacherSetSlidesFromFile(file); toast('カメラ取り込み完了'); }
+};
+
+/************************
+ * Student side
+ ************************/ 
+on($('#chooseStudent'),'click',()=>{ role='student'; $('#roleCard').classList.add('hidden'); $('#studentCard').classList.remove('hidden'); updatePills(); const hashRoom=decodeURIComponent(location.hash.slice(1)||''); if(hashRoom){ $('#sRoom').value=hashRoom; }});
+$('#btnJoin').onclick = ()=>{ const name = ($('#sRoom').value||location.hash.slice(1)).trim(); if(!name) return alert('部屋名を入力'); room=name; updatePills(); history.replaceState(null,'',`#${encodeURIComponent(room)}`); attachStudent(); };
+$('#btnLeave').onclick = ()=>{ leaveRoom(); $('#joinState').textContent='未入室'; toast('切断しました'); };
+window.addEventListener('load',()=>{ const hashRoom=decodeURIComponent(location.hash.slice(1)||''); if(hashRoom){ $('#sRoom').value=hashRoom; }});
+
+function attachStudent(){ $('#joinState').textContent='入室中…'; joinRoom(room); }
+
+let recvFileMeta=null, recvChunks=[];
+function handleHostMessage(msg){
+  if(msg.type==='sync:init'){ currentIndex = msg.currentIndex||0; updatePageInfo(); return; }
+  if(msg.type==='nav:set'){ currentIndex = msg.index||0; renderSlideTo(sctx, slides[currentIndex]); updatePageInfo(); redrawOpsOn(sctx); return; }
+  if(msg.type==='ops:add'){ const {index,id,op}=msg; opsCache[index]=opsCache[index]||{}; opsCache[index][id]=op; if(index===currentIndex){ if(op.kind==='clear'){ clearCanvas(sctx); renderSlideTo(sctx, slides[currentIndex]); } else { drawStroke(sctx, op); } } return; }
+  if(msg.type==='file:meta'){ recvChunks=[]; recvFileMeta=msg.meta; return; }
+  if(msg.type==='file:chunk'){ recvChunks.push(msg.data); return; }
+  if(msg.type==='file:end'){
+    const blob = new Blob(recvChunks, {type: recvFileMeta?.type || 'application/octet-stream'});
+    const url = URL.createObjectURL(blob);
+    const ext = (recvFileMeta?.name||'').split('.').pop().toLowerCase();
+    (async ()=>{
+      if(ext==='pdf'){
+        const doc=await pdfjsLib.getDocument(url).promise; const arr=[]; for(let i=1;i<=doc.numPages;i++) arr.push({type:'pdf',url,page:i}); slides=arr; currentIndex=0; await renderSlideTo(sctx, slides[0]); updatePageInfo(); $('#sNoBaseOverlay').classList.add('hidden'); toast('PDFを受信・表示しました');
+      } else { slides=[{type:'image',url}]; currentIndex=0; await renderSlideTo(sctx, slides[0]); updatePageInfo(); $('#sNoBaseOverlay').classList.add('hidden'); toast('画像を受信・表示しました'); }
+    })();
+    return;
   }
-  $('#threshLabel').textContent = (thresh>=0? thresh : `auto:${T}`);
-  // 3) binarize and recolor foreground to inkColor
-  const rgb = hexToRgb(inkColor);
-  for(let i=0;i<d.length;i+=4){ if(d[i] < T){ d[i]=rgb.r; d[i+1]=rgb.g; d[i+2]=rgb.b; d[i+3]=255; } else { d[i]=255; d[i+1]=255; d[i+2]=255; d[i+3]=255; } }
-  ctx.putImageData(img,0,0);
-  return c.toDataURL('image/png');
 }
 
-function hexToRgb(hex){ hex = hex.replace('#',''); if(hex.length===3) hex=hex.split('').map(ch=>ch+ch).join(''); const n=parseInt(hex,16); return {r:(n>>16)&255,g:(n>>8)&255,b:n&255}; }
+/************************
+ * Image enhancement (Otsu)
+ ************************/ 
+async function enhanceImageCanvas(canvasLike, inkColor, thresh){ const w=canvasLike.width,h=canvasLike.height; const c=canvasLike instanceof HTMLCanvasElement? canvasLike : (()=>{ const cv=document.createElement('canvas'); cv.width=w; cv.height=h; const cx=cv.getContext('2d'); cx.drawImage(canvasLike,0,0); return cv; })(); const ctx=c.getContext('2d'); const img=ctx.getImageData(0,0,w,h); const d=img.data; const hist=new Uint32Array(256); for(let i=0;i<d.length;i+=4){ const g=(d[i]*0.2126+d[i+1]*0.7152+d[i+2]*0.0722)|0; d[i]=d[i+1]=d[i+2]=g; hist[g]++; } let T=thresh; if(!(T>=0&&T<=255)){ const total=w*h; let sum=0; for(let i=0;i<256;i++) sum+=i*hist[i]; let sumB=0,wB=0,maxVar=0,t=0; for(let i=0;i<256;i++){ wB+=hist[i]; if(wB===0) continue; const wF=total-wB; if(wF===0) break; sumB+=i*hist[i]; const mB=sumB/wB, mF=(sum-sumB)/wF; const between=wB*wF*(mB-mF)*(mB-mF); if(between>maxVar){ maxVar=between; t=i; } } T=t; } $('#threshLabel').textContent=(thresh>=0?thresh:`auto:${T}`); const rgb=hexToRgb(inkColor); for(let i=0;i<d.length;i+=4){ if(d[i]<T){ d[i]=rgb.r; d[i+1]=rgb.g; d[i+2]=rgb.b; d[i+3]=255; } else { d[i]=255; d[i+1]=255; d[i+2]=255; d[i+3]=255; } } ctx.putImageData(img,0,0); return c.toDataURL('image/png'); }
+function hexToRgb(hex){ hex=hex.replace('#',''); if(hex.length===3) hex=hex.split('').map(ch=>ch+ch).join(''); const n=parseInt(hex,16); return {r:(n>>16)&255,g:(n>>8)&255,b:n&255}; }
 
-on($('#threshRange'),'input',e=>{ const v=+e.target.value; $('#threshLabel').textContent = (v>=0? v:'auto'); });
+/************************
+ * Demo (offline local only)
+ ************************/ 
+$('#demoBtn').onclick = async ()=>{
+  slides=[{type:'image',url:'data:image/svg+xml;utf8,'+encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720"><rect width="100%" height="100%" fill="white"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" font-size="48" fill="#111">デモスライド</text></svg>`)}];
+  currentIndex=0; await renderSlideTo(bctx, slides[0]); await renderSlideTo(sctx, slides[0]); $('#noBaseOverlay').classList.add('hidden'); $('#sNoBaseOverlay').classList.add('hidden'); updatePageInfo(); toast('デモスライドを表示しました');
+};
 
 </script>
 </body>
