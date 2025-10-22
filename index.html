@@ -1,593 +1,562 @@
-<!--
-Project: Dual-Camera Capture & P2P Transfer (GitHub Pages + WebRTC + Firebase Signaling)
-Author: ChatGPT
-How to use this file:
-1) Create a GitHub repo (public or private). Enable GitHub Pages for the repo (main branch / root).
-2) Create the files listed below in the repo with exactly these paths.
-3) Create a Firebase project (free tier is fine). Enable Firestore (in test mode for dev) and enable Anonymous Auth. Copy your web config into config.js as instructed below.
-4) Open https://<your-username>.github.io/<your-repo>/ on: 
-   - Smartphone (Controller+Storage): choose "Phone" role.
-   - Notebook PC① (Tethered camera): choose "PC" role.
-   - (Optional) Desktop PC②: later, open same site to fetch files P2P via WebRTC or download from the phone via USB.
-
-Files in this single document (search for the markers):
-  [1] /index.html
-  [2] /phone.html
-  [3] /pc.html
-  [4] /js/config.js  (EDIT your Firebase config here)
-  [5] /js/common.js  (signaling + utilities)
-  [6] /js/recorder.js (MediaRecorder chunking)
-  [7] /styles.css
--->
-
-<!-- ======================== [1] /index.html ======================== -->
 <!DOCTYPE html>
 <html lang="ja">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Dual-Cam Capture</title>
-  <link rel="stylesheet" href="./styles.css" />
-</head>
-<body>
-  <main class="wrap">
-    <h1>Dual‑Camera Capture & P2P Transfer</h1>
-    <p>スマホをコントローラ兼保存先に、PC①は自動録画。撮影後はスマホからPC②へP2P転送またはUSBで移動できます。</p>
-
-    <section class="card">
-      <h2>ルームを作成 / 参加</h2>
-      <label>Room ID <input id="room" placeholder="例: kyudo-2025-10-21" /></label>
-      <div class="row">
-        <a class="btn" id="go-phone">スマホで参加（Phone）</a>
-        <a class="btn ghost" id="go-pc">PC①で参加（PC）</a>
-      </div>
-      <p class="hint">※ 同じ Room ID をスマホとPC①で入力して同時参加します。</p>
-    </section>
-  </main>
+  <title>Classroom Canvas (Teacher / Student)</title>
+  <style>
+    :root{--bg:#0b0c10;--panel:#12151b;--ink:#e8ecf1;--muted:#9aa4b2;--accent:#5bbad5;--danger:#ff5d5d}
+    html,body{height:100%;}
+    body{margin:0;background:linear-gradient(180deg,#0b0c10 0%,#0e1117 100%);color:var(--ink);font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Helvetica,Arial,sans-serif;}
+    .app{max-width:1100px;margin:0 auto;padding:16px 16px 64px;}
+    h1{font-size:22px;margin:8px 0 16px 0;letter-spacing:0.3px}
+    .card{background:var(--panel);border:1px solid rgba(255,255,255,0.08);border-radius:16px;box-shadow:0 10px 25px rgba(0,0,0,0.25);}
+    .row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+    .col{flex:1 1 0}
+    .pad{padding:14px}
+    .muted{color:var(--muted);font-size:12px}
+    .controls{display:flex;gap:10px;flex-wrap:wrap}
+    button,input,select{background:#161a22;color:var(--ink);border:1px solid rgba(255,255,255,0.12);border-radius:10px;padding:8px 10px;font-size:14px}
+    button{cursor:pointer}
+    button.primary{background:linear-gradient(180deg,#1f6feb,#3168ff);border-color:#2b5cff}
+    button.ghost{background:transparent;border-color:rgba(255,255,255,0.18)}
+    button.warn{background:#2a1515;border-color:#522;}
+    button:disabled{opacity:.55;cursor:not-allowed}
+    .grid{display:grid;grid-template-columns:1fr 340px;gap:12px}
+    .stack{display:flex;flex-direction:column;gap:8px}
+    .toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+    .toolbar .swatch{width:20px;height:20px;border-radius:6px;border:1px solid rgba(255,255,255,.25);cursor:pointer}
+    .pill{padding:6px 10px;border-radius:999px;background:#0f1320;border:1px solid rgba(255,255,255,0.08);font-size:12px}
+    .mono{font-family:ui-monospace,Consolas,Menlo,Monaco,monospace;font-size:12px}
+    canvas{background:#fff;border-radius:14px;border:1px solid rgba(0,0,0,.15)}
+    .hint{font-size:12px;color:var(--muted)}
+    .tabbar{display:flex;gap:6px;flex-wrap:wrap}
+    .tabbar button{padding:6px 10px;font-size:12px}
+    .hr{height:1px;background:linear-gradient(90deg,transparent,rgba(255,255,255,.08),transparent);margin:8px 0}
+    .small{font-size:12px}
+    .hidden{display:none}
+    .w100{width:100%}
+  </style>
+  <!-- PDF.js (for student & teacher rendering of PDFs) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.3.136/pdf.min.js" integrity="sha512-A0d5Kk3U4tOoZqYdMe6pIA0w0tmHkJQ0XvF4mNQnXn8v+2Hciw2zoVzd9lG2v+8oJa8xQCJf6I9Z2s9AuiQWNA==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
   <script>
-    const roomInput = document.getElementById('room');
-    document.getElementById('go-phone').onclick = () => {
-      const r = roomInput.value.trim();
-      if(!r) return alert('Room ID を入力');
-      location.href = `./phone.html?room=${encodeURIComponent(r)}`;
-    };
-    document.getElementById('go-pc').onclick = () => {
-      const r = roomInput.value.trim();
-      if(!r) return alert('Room ID を入力');
-      location.href = `./pc.html?room=${encodeURIComponent(r)}`;
-    };
+    // Configure PDF.js worker
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.3.136/pdf.worker.min.js';
   </script>
-</body>
-</html>
-
-<!-- ======================== [2] /phone.html ======================== -->
-<!DOCTYPE html>
-<html lang="ja">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Phone — Dual‑Cam Capture</title>
-  <link rel="stylesheet" href="./styles.css" />
+  <!-- Firebase (RTDB + Storage). Fill your own config object below. -->
+  <script src="https://www.gstatic.com/firebasejs/10.13.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.13.1/firebase-database-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.13.1/firebase-storage-compat.js"></script>
 </head>
 <body>
-  <main class="wrap">
-    <h1>Phone（コントローラ & 保存）</h1>
-    <section class="grid-2">
-      <div class="card">
-        <h2>スマホのカメラ</h2>
-        <video id="phonePreview" playsinline muted></video>
-        <div class="row">
-          <button id="start" class="btn">撮影開始</button>
-          <button id="stop" class="btn danger" disabled>停止</button>
-        </div>
-        <div class="row">
-          <label><input type="checkbox" id="countdown" checked /> 両端末に3秒カウントダウン</label>
-        </div>
-        <div class="row">
-          <label>解像度<select id="resPhone">
-            <option value="1280x720">1280x720</option>
-            <option value="1920x1080">1920x1080</option>
-            <option value="3840x2160">3840x2160 (端末次第)</option>
-          </select></label>
-          <label>FPS<select id="fpsPhone">
-            <option>30</option>
-            <option>60</option>
-            <option>120</option>
-          </select></label>
-        </div>
-        <div class="row">
-          <label>録画形式<select id="mimePhone">
-            <option>video/webm;codecs=vp9</option>
-            <option>video/webm;codecs=vp8</option>
-            <option>video/webm;codecs=h264</option>
-          </select></label>
-        </div>
-        <div class="row">
-          <progress id="saveProg" max="100" value="0"></progress>
-          <span id="saveInfo"></span>
-        </div>
-        <div class="row"><button id="dlPhone" class="btn ghost" disabled>スマホ動画を保存</button></div>
-      </div>
+  <div class="app">
+    <div class="row">
+      <h1 class="col">クラス用キャンバス（先生 / 生徒）</h1>
+      <div class="pill mono" id="status">offline</div>
+    </div>
 
-      <div class="card">
-        <h2>PC①の動画受信</h2>
-        <div class="row">
-          <progress id="pcInProg" max="100" value="0"></progress>
-          <span id="pcInInfo"></span>
-        </div>
-        <div class="row"><button id="dlPC" class="btn ghost" disabled>PC①動画を保存</button></div>
-        <div class="row"><button id="relayToPC2" class="btn" disabled>PC②へP2P転送</button></div>
-        <p class="hint">※ PC②でも同じページを開き、Room ID を同じにして「PC」ではなく <b>PC②（受信専用）</b>として join（下記スイッチ）
-          すればP2Pでスマホから即時転送可能です。ネット未接続ならUSBで後で移動。</p>
-        <label><input type="checkbox" id="pc2Receiver" /> 次の接続はPC②（受信専用）として扱う</label>
-      </div>
-    </section>
-  </main>
-
-  <script type="module">
-    import { initFirebase, joinRoomAsPhone, bytesPretty, saveBlob } from './js/common.js';
-    import { captureStreamAndRecord } from './js/recorder.js';
-    await initFirebase();
-
-    const url = new URL(location.href);
-    const roomId = url.searchParams.get('room');
-    if(!roomId){ alert('Room ID がありません'); location.href = './'; }
-
-    const els = {
-      phonePreview: document.getElementById('phonePreview'),
-      start: document.getElementById('start'),
-      stop: document.getElementById('stop'),
-      countdown: document.getElementById('countdown'),
-      resPhone: document.getElementById('resPhone'),
-      fpsPhone: document.getElementById('fpsPhone'),
-      mimePhone: document.getElementById('mimePhone'),
-      saveProg: document.getElementById('saveProg'),
-      saveInfo: document.getElementById('saveInfo'),
-      dlPhone: document.getElementById('dlPhone'),
-      pcInProg: document.getElementById('pcInProg'),
-      pcInInfo: document.getElementById('pcInInfo'),
-      dlPC: document.getElementById('dlPC'),
-      relayToPC2: document.getElementById('relayToPC2'),
-      pc2Receiver: document.getElementById('pc2Receiver'),
-    };
-
-    // Join as phone (controller + sink for PC①)
-    const phone = await joinRoomAsPhone(roomId, {
-      onPC1FileProgress: (got, total) => {
-        els.pcInProg.max = total || 100;
-        els.pcInProg.value = got;
-        els.pcInInfo.textContent = `${bytesPretty(got)} / ${total?bytesPretty(total):'…'}`;
-      },
-      onPC1FileReady: (blob) => {
-        els.dlPC.disabled = false;
-        els.dlPC.onclick = () => saveBlob(blob, `PC1_${roomId}_${Date.now()}.webm`);
-        els.relayToPC2.disabled = false;
-        phone.setPC1Blob(blob);
-      }
-    });
-
-    // Prepare phone camera preview & recorder
-    let phoneRecorder = null;
-
-    async function startBoth() {
-      const [w,h] = els.resPhone.value.split('x').map(Number);
-      const fps = Number(els.fpsPhone.value);
-      const mime = els.mimePhone.value;
-      phone.sendCommand({type:'prepare', payload:{countdown: els.countdown.checked, fps}});
-      const {stream, getBlob, onData, stop} = await captureStreamAndRecord({
-        video: { width:w, height:h, frameRate:fps, facingMode:'environment' },
-        audio: true,
-        mimeType: mime,
-        timesliceMs: 1500, // chunk every 1.5s for progressive transfer if needed later
-        previewEl: els.phonePreview,
-      });
-      phoneRecorder = {getBlob, stop};
-
-      // Tell PC① to start after optional countdown
-      await phone.sendCommand({type:'start'});
-
-      els.start.disabled = true;
-      els.stop.disabled = false;
-    }
-
-    async function stopBoth() {
-      // Stop phone
-      const phoneBlob = await phoneRecorder.stop();
-      els.dlPhone.disabled = false;
-      els.dlPhone.onclick = () => saveBlob(phoneBlob, `PHONE_${roomId}_${Date.now()}.webm`);
-
-      // Tell PC① to stop and begin upload to phone
-      const meta = await phone.sendCommand({type:'stop'}); // returns {size, mime}
-
-      // Save progress UI (phone own file size)
-      els.saveProg.value = 100; els.saveProg.max = 100;
-      els.saveInfo.textContent = `スマホ録画: ${bytesPretty(phoneBlob.size)} saved`;
-
-      els.start.disabled = false;
-      els.stop.disabled = true;
-    }
-
-    els.start.onclick = startBoth;
-    els.stop.onclick = stopBoth;
-
-    // Optional: treat next peer as PC② receiver (no camera), just receive relayed blobs
-    els.pc2Receiver.addEventListener('change', ()=>{
-      phone.setNextPeerAsReceiverOnly(els.pc2Receiver.checked);
-    });
-
-    els.relayToPC2.onclick = async () => {
-      if(!phone.hasPC1Blob()) return alert('PC①動画がありません');
-      try {
-        await phone.relayBlobToPC2();
-        alert('PC②へ転送完了');
-      } catch(e){
-        console.error(e);
-        alert('PC②への転送に失敗しました。PC②が同じRoomで待機中か確認してください');
-      }
-    };
-  </script>
-</body>
-</html>
-
-<!-- ======================== [3] /pc.html ======================== -->
-<!DOCTYPE html>
-<html lang="ja">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>PC — Dual‑Cam Capture</title>
-  <link rel="stylesheet" href="./styles.css" />
-</head>
-<body>
-  <main class="wrap">
-    <h1>PC①（自動録画端末）</h1>
-    <section class="card">
-      <video id="pcPreview" playsinline muted></video>
+    <!-- Role select -->
+    <div class="card pad" id="roleCard">
       <div class="row">
-        <label>解像度<select id="resPC">
-          <option value="1280x720">1280x720</option>
-          <option value="1920x1080">1920x1080</option>
-          <option value="3840x2160">3840x2160 (端末/カメラ依存)</option>
-        </select></label>
-        <label>FPS<select id="fpsPC">
-          <option>30</option>
-          <option>60</option>
-          <option>120</option>
-        </select></label>
-        <label>録画形式<select id="mimePC">
-          <option>video/webm;codecs=vp9</option>
-          <option>video/webm;codecs=vp8</option>
-          <option>video/webm;codecs=h264</option>
-        </select></label>
+        <div class="col">
+          <div class="stack">
+            <div class="muted">はじめに役割を選んでください</div>
+            <div class="controls">
+              <button class="primary" id="chooseTeacher">先生として入る</button>
+              <button class="ghost" id="chooseStudent">生徒として入る</button>
+            </div>
+            <div class="hint">GitHub Pages のような静的ホスティングで動作。リアルタイム同期には Firebase Realtime Database / Storage を使います。</div>
+          </div>
+        </div>
       </div>
-      <div class="row">
-        <progress id="upProg" max="100" value="0"></progress>
-        <span id="upInfo"></span>
+    </div>
+
+    <!-- Teacher panel -->
+    <div class="card pad hidden" id="teacherCard">
+      <div class="stack">
+        <div class="row">
+          <div class="col">
+            <label>部屋名</label>
+            <input class="w100" id="tRoom" placeholder="ex) class-2A-math"/>
+          </div>
+          <div class="col" style="min-width:220px;align-self:end">
+            <button class="primary" id="btnStartRoom">部屋を立ち上げる</button>
+          </div>
+        </div>
+        <div class="hr"></div>
+        <div class="grid">
+          <div class="card pad" style="grid-column:1/2">
+            <div class="stack">
+              <div class="toolbar">
+                <button id="btnPrev">◀︎</button>
+                <div id="pageInfo" class="pill">0 / 0</div>
+                <button id="btnNext">▶︎</button>
+                <div class="pill">ツール:</div>
+                <button id="toolPen" class="primary">ペン</button>
+                <button id="toolEraser">消しゴム</button>
+                <input type="range" id="penSize" min="2" max="24" value="6"/>
+                <div class="swatch" title="#ff4757" data-color="#ff4757" style="background:#ff4757"></div>
+                <div class="swatch" title="#2ed573" data-color="#2ed573" style="background:#2ed573"></div>
+                <div class="swatch" title="#1e90ff" data-color="#1e90ff" style="background:#1e90ff"></div>
+                <div class="swatch" title="#111" data-color="#111" style="background:#111"></div>
+                <button id="btnClear" class="warn">注釈クリア</button>
+              </div>
+              <canvas id="board" width="1280" height="720"></canvas>
+              <div class="hint">※キャンバスのベース（PDF/画像）は劣化なしで配信。注釈はベクターストロークを即時同期。</div>
+            </div>
+          </div>
+          <div class="stack" style="grid-column:2/3">
+            <div class="card pad">
+              <div class="stack">
+                <div class="muted">ベースを選択</div>
+                <div class="controls">
+                  <input type="file" id="filePick" accept=".pdf,image/*,.ppt,.pptx"/>
+                  <button id="btnUseCamera">カメラから取り込み（テキスト強調）</button>
+                </div>
+                <div class="small muted">PowerPoint は PDF へエクスポートしてから読み込み推奨（静的ホスティングのため）。</div>
+                <div class="hr"></div>
+                <div class="stack">
+                  <div class="muted">テキスト強調（画像/カメラ取込時）</div>
+                  <label class="small"><input type="checkbox" id="enhanceToggle" checked /> 自動二値化（Otsu）で紙を白、文字を色で塗りつぶし</label>
+                  <label class="small">しきい値調整 <input type="range" id="threshRange" min="0" max="255" value="-1"> <span id="threshLabel">auto</span></label>
+                  <label class="small">文字色 <input type="color" id="inkColor" value="#0033cc"/></label>
+                </div>
+              </div>
+            </div>
+            <div class="card pad">
+              <div class="stack">
+                <div class="muted">共有リンク</div>
+                <input id="shareUrl" class="w100" readonly />
+                <div class="hint">この URL と部屋名を生徒に伝えてください。</div>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
-      <p class="hint">※ スマホからの開始/停止指示に連動します。停止後、自動でスマホへファイルをP2P送信します。</p>
-    </section>
-  </main>
+    </div>
 
-  <script type="module">
-    import { initFirebase, joinRoomAsPC, bytesPretty } from './js/common.js';
-    import { captureStreamAndRecord } from './js/recorder.js';
-    await initFirebase();
+    <!-- Student panel -->
+    <div class="card pad hidden" id="studentCard">
+      <div class="stack">
+        <div class="row">
+          <div class="col">
+            <label>部屋名</label>
+            <input class="w100" id="sRoom" placeholder="先生から教わった部屋名"/>
+          </div>
+          <div class="col" style="min-width:220px;align-self:end">
+            <button class="primary" id="btnJoin">入室</button>
+          </div>
+        </div>
+        <div class="hr"></div>
+        <div class="stack">
+          <div class="toolbar">
+            <div id="sPageInfo" class="pill">0 / 0</div>
+          </div>
+          <canvas id="sBoard" width="1280" height="720"></canvas>
+        </div>
+      </div>
+    </div>
+  </div>
 
-    const url = new URL(location.href);
-    const roomId = url.searchParams.get('room');
-    if(!roomId){ alert('Room ID がありません'); location.href = './'; }
-
-    const els = {
-      pcPreview: document.getElementById('pcPreview'),
-      resPC: document.getElementById('resPC'),
-      fpsPC: document.getElementById('fpsPC'),
-      mimePC: document.getElementById('mimePC'),
-      upProg: document.getElementById('upProg'),
-      upInfo: document.getElementById('upInfo'),
-    };
-
-    let rec = null; let lastMime = null;
-
-    const pc = await joinRoomAsPC(roomId, {
-      onCommand: async (cmd) => {
-        if(cmd.type==='prepare'){
-          // Optional countdown on both devices
-          if(cmd.payload?.countdown){ await new Promise(r=>setTimeout(r, 3000)); }
-        }
-        if(cmd.type==='start'){
-          const [w,h] = els.resPC.value.split('x').map(Number);
-          const fps = Number(els.fpsPC.value);
-          const mime = els.mimePC.value; lastMime = mime;
-          rec = await captureStreamAndRecord({
-            video:{width:w,height:h,frameRate:fps}, audio:true, mimeType:mime,
-            previewEl: els.pcPreview,
-          });
-        }
-        if(cmd.type==='stop'){
-          const blob = await rec.stop();
-          // begin upload (P2P send) to phone in chunks
-          const total = blob.size; let sent = 0;
-          await pc.sendFileToPhone(blob, {
-            onProgress: (n)=>{ sent=n; els.upProg.max = total; els.upProg.value = n; els.upInfo.textContent = `${bytesPretty(n)} / ${bytesPretty(total)}`; },
-          });
-          return { size: total, mime: lastMime };
-        }
-      }
-    });
-  </script>
-</body>
-</html>
-
-<!-- ======================== [4] /js/config.js ======================== -->
-// Fill your Firebase web config below
-export const firebaseConfig = {
+<script>
+/********************
+ * 1) Firebase setup
+ ********************/
+// ❶ Fill YOUR Firebase config here
+const firebaseConfig = {
   apiKey: "YOUR_API_KEY",
   authDomain: "YOUR_PROJECT.firebaseapp.com",
+  databaseURL: "https://YOUR_PROJECT-default-rtdb.firebaseio.com",
   projectId: "YOUR_PROJECT",
   storageBucket: "YOUR_PROJECT.appspot.com",
-  messagingSenderId: "000000000000",
-  appId: "1:000000000000:web:xxxxxxxxxxxxxxxxxxxxxx"
+  messagingSenderId: "",
+  appId: ""
 };
 
-// Firestore collections used:
-// rooms/{roomId}/signals (offer/answer/ice)
-// rooms/{roomId}/commands (start/stop/prepare)
-// rooms/{roomId}/meta (receiverOnly flag)
-
-/* Security note: For production, define proper Firestore Security Rules to restrict reads/writes to the room participants
-   using a shared secret (room password) hashed and stored in meta. For development, Firestore test rules are acceptable. */
-
-<!-- ======================== [5] /js/common.js ======================== -->
-import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
-import { getAuth, signInAnonymously } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
-import { getFirestore, collection, doc, setDoc, addDoc, onSnapshot, serverTimestamp, query, orderBy, deleteDoc } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
-import { firebaseConfig } from './config.js';
-
-let app, db, auth;
-export async function initFirebase(){
-  app = initializeApp(firebaseConfig);
-  auth = getAuth(app);
-  await signInAnonymously(auth);
-  db = getFirestore(app);
+// Initialize app (won't error if placeholders; offline mode)
+let appFB, db, storage;
+try {
+  appFB = firebase.initializeApp(firebaseConfig);
+  db = firebase.database();
+  storage = firebase.storage();
+  document.getElementById('status').textContent = 'online';
+} catch(e){
+  console.warn('Firebase init warning:', e);
+  document.getElementById('status').textContent = 'offline';
 }
 
-export const bytesPretty = (n) => {
-  if(!n && n!==0) return '0 B';
-  const u=['B','KB','MB','GB']; let i=0; let x=n;
-  while(x>=1024 && i<u.length-1){ x/=1024; i++; }
-  return `${x.toFixed(1)} ${u[i]}`;
-};
+/********************
+ * 2) DOM helpers
+ ********************/
+const $ = sel => document.querySelector(sel);
+const on = (el, ev, fn) => el.addEventListener(ev, fn);
+const sleep = ms => new Promise(r=>setTimeout(r,ms));
 
-export function saveBlob(blob, filename){
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(a.href);
-}
+/********************
+ * 3) Global State
+ ********************/
+let role = null; // 'teacher' | 'student'
+let room = null;
+let pdfDoc = null; // teacher or student PDF.js doc
+let slides = []; // array of slide descriptors {type:'pdf'|'image', url, page?}
+let currentIndex = 0;
+let drawingState = { tool:'pen', color:'#1e90ff', size:6 };
+let isDrawing = false; let lastPt = null;
 
-async function createPeerConnection(roomId, role){
-  const pc = new RTCPeerConnection({
-    iceServers: [
-      { urls: 'stun:stun.l.google.com:19302' },
-      { urls: 'stun:global.stun.twilio.com:3478?transport=udp' }
-    ]
-  });
+/********************
+ * 4) Role selection UI
+ ********************/
+const roleCard = $('#roleCard');
+on($('#chooseTeacher'),'click',()=>{
+  role = 'teacher';
+  roleCard.classList.add('hidden');
+  $('#teacherCard').classList.remove('hidden');
+  $('#shareUrl').value = location.href.split('#')[0];
+});
 
-  // Firestore paths
-  const roomRef = doc(collection(db, 'rooms'), roomId);
-  const signalsCol = collection(roomRef, 'signals');
-  const commandsCol = collection(roomRef, 'commands');
-  const metaDoc = doc(roomRef, 'meta', 'flags');
+on($('#chooseStudent'),'click',()=>{
+  role = 'student';
+  roleCard.classList.add('hidden');
+  $('#studentCard').classList.remove('hidden');
+});
 
-  // ICE
-  pc.onicecandidate = async (e)=>{
-    if(e.candidate){ await addDoc(signalsCol, { type:'ice', role, candidate: e.candidate.toJSON(), ts: serverTimestamp() }); }
-  };
+/********************
+ * 5) Canvas contexts
+ ********************/
+const board = $('#board');
+const bctx = board.getContext('2d');
+const sBoard = $('#sBoard');
+const sctx = sBoard.getContext('2d');
 
-  // Clear old signals on fresh join (light cleanup)
-  // NOTE: Not bulletproof but fine for per-session usage.
-  // (In production, use per-client subpaths.)
-  //
+function clearCanvas(ctx){ ctx.clearRect(0,0,ctx.canvas.width,ctx.canvas.height); }
 
-  return { pc, roomRef, signalsCol, commandsCol, metaDoc };
-}
-
-// ------------ Phone (controller + sink) ------------
-export async function joinRoomAsPhone(roomId, hooks){
-  const { pc, roomRef, signalsCol, commandsCol, metaDoc } = await createPeerConnection(roomId, 'phone');
-
-  // Data channel for commands to PC①
-  const dc = pc.createDataChannel('cmd');
-  let pc1Blob = null;
-  let nextPeerReceiverOnly = false;
-
-  function setNextPeerAsReceiverOnly(flag){ nextPeerReceiverOnly = !!flag; setDoc(metaDoc, { receiverOnly: nextPeerReceiverOnly }, {merge:true}); }
-
-  function hasPC1Blob(){ return !!pc1Blob; }
-  function setPC1Blob(b){ pc1Blob = b; }
-
-  async function relayBlobToPC2(){
-    // Open a second peer (Phone -> PC②). Here we reuse the same room but receiverOnly flag tells pc.html to skip camera/recording.
-    await setDoc(metaDoc, { receiverOnly: true }, { merge:true });
-    // Create a new data channel for file shipping
-    const ch = pc.createDataChannel('relay');
-    const buf = await pc1Blob.arrayBuffer();
-    const chunk = 64*1024; // 64KB
-    let sent = 0;
-    await new Promise((resolve,reject)=>{
-      ch.onopen = async ()=>{
-        // send simple header
-        ch.send(JSON.stringify({type:'fileHeader', name:`PC1_${roomId}_${Date.now()}.webm`, size: buf.byteLength, mime: pc1Blob.type||'video/webm'}));
-        const timer = setInterval(()=>{
-          while(ch.bufferedAmount < 4*1024*1024 && sent < buf.byteLength){
-            const slice = buf.slice(sent, Math.min(sent+chunk, buf.byteLength));
-            ch.send(slice);
-            sent += slice.byteLength || slice.byteLength===0 ? slice.byteLength : slice.byteLength; // in workersize-compatible env
-          }
-          if(sent>=buf.byteLength){ clearInterval(timer); ch.send(JSON.stringify({type:'fileEnd'})); resolve(); }
-        }, 10);
-      };
-      ch.onerror = reject;
+/********************
+ * 6) PDF & Image rendering
+ ********************/
+async function renderSlideTo(ctx, slide){
+  clearCanvas(ctx);
+  if(!slide){return}
+  if(slide.type==='image'){
+    await new Promise((res)=>{
+      const img = new Image(); img.crossOrigin='anonymous'; img.onload=()=>{
+        // Fit contain
+        const r = Math.min(ctx.canvas.width/img.width, ctx.canvas.height/img.height);
+        const w = img.width*r, h = img.height*r;
+        const x = (ctx.canvas.width - w)/2; const y=(ctx.canvas.height-h)/2;
+        ctx.drawImage(img, x,y,w,h);
+        res();
+      }; img.src = slide.url;
     });
+  } else if(slide.type==='pdf'){
+    const doc = slide._doc || (slide._doc = await pdfjsLib.getDocument(slide.url).promise);
+    const page = await doc.getPage(slide.page||1);
+    const viewport = page.getViewport({scale:1});
+    const scale = Math.min(ctx.canvas.width/viewport.width, ctx.canvas.height/viewport.height);
+    const v2 = page.getViewport({scale});
+    const tmp = document.createElement('canvas'); tmp.width=v2.width; tmp.height=v2.height;
+    await page.render({canvasContext: tmp.getContext('2d'), viewport: v2}).promise;
+    const x=(ctx.canvas.width-v2.width)/2, y=(ctx.canvas.height-v2.height)/2;
+    ctx.drawImage(tmp,x,y);
   }
+}
 
-  // Incoming data channels (from PC① or PC②)
-  pc.ondatachannel = (ev)=>{
-    const channel = ev.channel;
-    if(channel.label==='pc1file'){
-      // File receiver for PC① stream
-      let header=null; let received=0; let parts=[];
-      channel.onmessage = (e)=>{
-        if(typeof e.data === 'string'){
-          const msg = JSON.parse(e.data);
-          if(msg.type==='fileHeader'){ header = msg; hooks?.onPC1FileProgress?.(0, header.size); }
-          if(msg.type==='fileEnd'){
-            const blob = new Blob(parts, { type: header?.mime || 'video/webm' });
-            hooks?.onPC1FileReady?.(blob); parts=[]; received=0; header=null; }
-        } else {
-          parts.push(e.data); received += e.data.byteLength; hooks?.onPC1FileProgress?.(received, header?.size||0);
-        }
-      };
+function updatePageInfo(){
+  $('#pageInfo').textContent = `${slides.length? currentIndex+1:0} / ${slides.length}`;
+  $('#sPageInfo').textContent = `${slides.length? currentIndex+1:0} / ${slides.length}`;
+}
+
+/********************
+ * 7) Teacher: start room & upload base
+ ********************/
+async function ensureRoomStructure(name){
+  if(!db) return;
+  const baseRef = db.ref(`rooms/${name}`);
+  await baseRef.child('meta').set({ createdAt: Date.now() });
+  // init
+  await baseRef.child('slides').set([]);
+  await baseRef.child('current').set(0);
+  await baseRef.child('ops').set({}); // ops/{slideIndex}/{opId} = op
+}
+
+async function uploadToStorage(file, path){
+  if(!storage) { return {url: URL.createObjectURL(file)} } // offline fallback
+  const ref = storage.ref().child(path);
+  await ref.put(file);
+  const url = await ref.getDownloadURL();
+  return {url};
+}
+
+async function teacherSetSlides(slideArray){
+  slides = slideArray;
+  currentIndex = 0;
+  updatePageInfo();
+  await renderSlideTo(bctx, slides[0]);
+  if(!db || !room) return;
+  // Save slides metadata to RTDB (students will fetch URLs directly)
+  await db.ref(`rooms/${room}/slides`).set(slides.map(s=>({type:s.type,url:s.url,page:s.page||1})));
+  await db.ref(`rooms/${room}/current`).set(0);
+}
+
+// File picker handler
+on($('#filePick'),'change', async (e)=>{
+  const file = e.target.files[0]; if(!file || !room) return;
+  const ext = file.name.split('.').pop().toLowerCase();
+  if(ext==='pdf'){
+    const path = `rooms/${room}/base/${Date.now()}-${file.name}`;
+    const {url} = await uploadToStorage(file, path);
+    // Load PDF to count pages
+    const doc = await pdfjsLib.getDocument(url).promise;
+    const arr = [];
+    const count = doc.numPages;
+    for(let i=1;i<=count;i++) arr.push({type:'pdf', url, page:i});
+    await teacherSetSlides(arr);
+  } else if(['png','jpg','jpeg','webp','bmp'].includes(ext)){
+    // Optional enhancement
+    let blob = file;
+    if($('#enhanceToggle').checked){
+      blob = await enhanceImageFile(file, $('#inkColor').value, parseInt($('#threshRange').value,10));
     }
-  };
+    const path = `rooms/${room}/base/${Date.now()}-${file.name}`;
+    const {url} = await uploadToStorage(blob, path);
+    await teacherSetSlides([{type:'image', url}]);
+  } else if(['ppt','pptx'].includes(ext)){
+    alert('PowerPoint は PDF へエクスポートしてから読み込んでください。');
+  } else {
+    alert('未対応のファイル形式です');
+  }
+});
 
-  // Signaling: Phone is the offerer
-  const offer = await pc.createOffer();
-  await pc.setLocalDescription(offer);
-  await addDoc(signalsCol, { type:'offer', sdp: offer.sdp, role:'phone', ts: serverTimestamp() });
+// Camera capture & enhance
+on($('#btnUseCamera'),'click', async ()=>{
+  if(!room) return alert('先に部屋を立ち上げてください');
+  const stream = await navigator.mediaDevices.getUserMedia({video:true});
+  const video = document.createElement('video'); video.srcObject = stream; await video.play();
+  // Simple modal-ish prompt
+  const shot = await new Promise(res=>{
+    const dlg = document.createElement('div');
+    dlg.style.position='fixed'; dlg.style.inset='0'; dlg.style.background='rgba(0,0,0,.8)'; dlg.style.display='grid'; dlg.style.placeItems='center';
+    const inner = document.createElement('div'); inner.className='card pad'; inner.style.width='min(90vw,900px)';
+    inner.appendChild(video);
+    const row = document.createElement('div'); row.className='row';
+    const b1 = document.createElement('button'); b1.className='primary'; b1.textContent='撮影';
+    const b2 = document.createElement('button'); b2.textContent='キャンセル';
+    row.appendChild(b1); row.appendChild(b2); inner.appendChild(row); dlg.appendChild(inner);
+    document.body.appendChild(dlg);
+    b1.onclick=()=>{res(true);}; b2.onclick=()=>{res(false);};
+  }).finally(()=>{});
+  const track = stream.getTracks()[0];
+  let blob = null;
+  if(shot){
+    const c = document.createElement('canvas'); c.width = 1920; c.height = Math.round(1920*(video.videoHeight/video.videoWidth));
+    const cctx = c.getContext('2d'); cctx.drawImage(video,0,0,c.width,c.height);
+    // enhance
+    const dataUrl = await enhanceImageCanvas(c, $('#inkColor').value, parseInt($('#threshRange').value,10));
+    blob = await (await fetch(dataUrl)).blob();
+  }
+  track.stop();
+  document.querySelectorAll('video').forEach(v=>v.remove());
+  document.querySelectorAll('div').forEach(d=>{ if(d.style && d.style.position==='fixed') d.remove();});
+  if(blob){
+    const path = `rooms/${room}/base/${Date.now()}-camera.png`;
+    const {url} = await uploadToStorage(blob, path);
+    await teacherSetSlides([{type:'image', url}]);
+  }
+});
 
-  // Listen for answer and ICE
-  onSnapshot(query(signalsCol, orderBy('ts','asc')), async (snap)=>{
-    for(const d of snap.docs){ const data = d.data();
-      if(data.type==='answer' && pc.signalingState!=='stable'){ await pc.setRemoteDescription({ type:'answer', sdp:data.sdp }); }
-      if(data.type==='ice' && data.role==='pc'){ try{ await pc.addIceCandidate(data.candidate); }catch{} }
-    }
+// Start room
+on($('#btnStartRoom'),'click', async()=>{
+  const name = $('#tRoom').value.trim(); if(!name) return alert('部屋名を入力');
+  room = name;
+  $('#shareUrl').value = location.origin + location.pathname + `#${encodeURIComponent(room)}`;
+  history.replaceState(null,'',`#${encodeURIComponent(room)}`);
+  if(db){
+    await ensureRoomStructure(room);
+  }
+  attachTeacherRealtime();
+});
+
+function attachTeacherRealtime(){
+  if(!db || !room) return;
+  // listeners for external changes (e.g., another teacher client)
+  db.ref(`rooms/${room}/current`).on('value', async snap=>{
+    const v = snap.val(); if(typeof v==='number' && v !== currentIndex){ currentIndex=v; await renderSlideTo(bctx, slides[currentIndex]); updatePageInfo(); redrawOpsOn(bctx); }
   });
-
-  async function sendCommand(cmd){
-    // also write to commands collection (for logs / debug)
-    await addDoc(commandsCol, { ...cmd, ts: serverTimestamp() });
-    // via datachannel
-    return await new Promise((resolve,reject)=>{
-      dc.onmessage = (e)=>{ try{ resolve(JSON.parse(e.data)); }catch{ resolve(null); } };
-      if(dc.readyState==='open') dc.send(JSON.stringify(cmd)); else dc.onopen=()=>dc.send(JSON.stringify(cmd));
-      setTimeout(()=>resolve(null), 30000); // failsafe
-    });
-  }
-
-  return { sendCommand, setNextPeerAsReceiverOnly, hasPC1Blob, setPC1Blob, relayBlobToPC2 };
-}
-
-// ------------ PC (recorder, uploads to phone) ------------
-export async function joinRoomAsPC(roomId, hooks){
-  const { pc, roomRef, signalsCol, commandsCol, metaDoc } = await createPeerConnection(roomId, 'pc');
-
-  // Receiver-only mode (PC②) — if flagged by phone
-  let receiverOnly = false;
-  onSnapshot(metaDoc, (snap)=>{ const data=snap.data(); receiverOnly = !!data?.receiverOnly; });
-
-  // Data channel for commands (from phone)
-  let cmdChannel = null;
-  pc.ondatachannel = (ev)=>{
-    if(ev.channel.label==='cmd'){
-      cmdChannel = ev.channel;
-      cmdChannel.onmessage = async (e)=>{
-        const cmd = JSON.parse(e.data);
-        const result = await hooks?.onCommand?.(cmd);
-        // reply
-        try{ cmdChannel.send(JSON.stringify(result||{})); }catch{}
-      };
-    }
-    if(ev.channel.label==='relay'){
-      // This is PC② receiving a relayed blob from phone
-      if(!receiverOnly) return; // ignore if not in PC② role
-      let header=null, parts=[], got=0;
-      ev.channel.onmessage = (e)=>{
-        if(typeof e.data==='string'){
-          const msg = JSON.parse(e.data);
-          if(msg.type==='fileHeader'){ header=msg; }
-          if(msg.type==='fileEnd'){
-            const blob = new Blob(parts, { type: header?.mime || 'video/webm' });
-            const name = header?.name || `Relay_${Date.now()}.webm`;
-            const a = document.createElement('a');
-            a.href = URL.createObjectURL(blob); a.download = name; a.click(); URL.revokeObjectURL(a.href);
-            parts=[]; got=0; header=null;
-          }
-        } else { parts.push(e.data); got+=e.data.byteLength; }
-      };
-    }
-  };
-
-  // File sender channel (to phone)
-  const fileCh = pc.createDataChannel('pc1file');
-  async function sendFileToPhone(blob, {onProgress}){
-    const buf = await blob.arrayBuffer();
-    const chunk = 64*1024; let sent=0;
-    await new Promise((resolve,reject)=>{
-      fileCh.onopen = ()=>{
-        fileCh.send(JSON.stringify({type:'fileHeader', name:`PC1_${roomId}_${Date.now()}.webm`, size: buf.byteLength, mime: blob.type||'video/webm'}));
-        const timer = setInterval(()=>{
-          while(fileCh.bufferedAmount < 4*1024*1024 && sent < buf.byteLength){
-            const slice = buf.slice(sent, Math.min(sent+chunk, buf.byteLength));
-            fileCh.send(slice); sent += slice.byteLength; onProgress?.(sent);
-          }
-          if(sent>=buf.byteLength){ clearInterval(timer); fileCh.send(JSON.stringify({type:'fileEnd'})); resolve(); }
-        }, 10);
-      };
-      fileCh.onerror = reject;
-    });
-  }
-
-  // Signaling: PC is the answerer
-  onSnapshot(query(collection(doc(collection(db,'rooms'), roomId), 'signals'), orderBy('ts','asc')), async (snap)=>{
-    for(const d of snap.docs){ const data = d.data();
-      if(data.type==='offer' && data.role==='phone' && !pc.currentRemoteDescription){ await pc.setRemoteDescription({type:'offer', sdp:data.sdp}); const ans = await pc.createAnswer(); await pc.setLocalDescription(ans); await addDoc(collection(doc(collection(db,'rooms'), roomId),'signals'), {type:'answer', sdp: ans.sdp, role:'pc', ts: serverTimestamp()}); }
-      if(data.type==='ice' && data.role==='phone'){ try{ await pc.addIceCandidate(data.candidate); }catch{} }
-    }
+  // preload existing slide set
+  db.ref(`rooms/${room}/slides`).on('value', async snap=>{
+    const arr = snap.val()||[]; slides = arr; await renderSlideTo(bctx, slides[currentIndex]||null); updatePageInfo(); redrawOpsOn(bctx);
   });
-
-  return { sendFileToPhone };
 }
 
-<!-- ======================== [6] /js/recorder.js ======================== -->
-export async function captureStreamAndRecord({ video, audio, mimeType, timesliceMs=0, previewEl }){
-  const stream = await navigator.mediaDevices.getUserMedia({ video, audio });
-  if(previewEl){ previewEl.srcObject = stream; await previewEl.play(); }
-  const chunks = []; let recorder;
-  try { recorder = new MediaRecorder(stream, { mimeType }); }
-  catch(e){ console.warn('MediaRecorder init failed, fallback no mime'); recorder = new MediaRecorder(stream); }
+/********************
+ * 8) Student: join & realtime rendering
+ ********************/
+on($('#btnJoin'),'click', async()=>{
+  const name = ($('#sRoom').value||location.hash.slice(1)).trim(); if(!name) return alert('部屋名を入力');
+  room = name; history.replaceState(null,'',`#${encodeURIComponent(room)}`);
+  attachStudentRealtime();
+});
 
-  recorder.ondataavailable = (e)=>{ if(e.data && e.data.size>0){ chunks.push(e.data); } };
-  recorder.start(timesliceMs || undefined);
+window.addEventListener('load',()=>{
+  const hashRoom = decodeURIComponent(location.hash.slice(1)||'');
+  if(hashRoom){ $('#sRoom').value = hashRoom; }
+});
 
-  async function stop(){
-    await new Promise(res=>{ recorder.onstop = res; recorder.stop(); });
-    stream.getTracks().forEach(t=>t.stop());
-    const blob = new Blob(chunks, { type: recorder.mimeType || mimeType || 'video/webm' });
-    return blob;
+function attachStudentRealtime(){
+  if(!db || !room) return;
+  db.ref(`rooms/${room}/slides`).on('value', async snap=>{
+    const arr = snap.val()||[]; slides = arr; currentIndex = 0; await renderSlideTo(sctx, slides[0]||null); updatePageInfo(); redrawOpsOn(sctx);
+  });
+  db.ref(`rooms/${room}/current`).on('value', async snap=>{
+    const idx = snap.val(); if(typeof idx==='number'){ currentIndex=idx; await renderSlideTo(sctx, slides[currentIndex]||null); updatePageInfo(); redrawOpsOn(sctx); }
+  });
+  db.ref(`rooms/${room}/ops`).on('value', snap=>{
+    // full redraw of ops when any change (simple and robust)
+    opsCache = snap.val()||{}; redrawOpsOn(sctx);
+  });
+}
+
+/********************
+ * 9) Navigation
+ ********************/
+on($('#btnPrev'),'click', async()=>{
+  if(currentIndex>0){ currentIndex--; await renderSlideTo(bctx, slides[currentIndex]); updatePageInfo(); publishCurrent(); }
+});
+
+on($('#btnNext'),'click', async()=>{
+  if(currentIndex < slides.length-1){ currentIndex++; await renderSlideTo(bctx, slides[currentIndex]); updatePageInfo(); publishCurrent(); }
+});
+
+async function publishCurrent(){ if(db && room){ await db.ref(`rooms/${room}/current`).set(currentIndex); } redrawOpsOn(bctx); }
+
+/********************
+ * 10) Annotation (vector ops)
+ ********************/
+let opsCache = {}; // {slideIndex:{opId: op}}
+
+function opRef(idx){ return db.ref(`rooms/${room}/ops/${idx}`); }
+
+function redrawOpsOn(ctx){
+  // re-render base then all ops for currentIndex
+  const slide = slides[currentIndex]; if(!slide) return;
+  // base is already rendered outside; here draw ops on top
+  const list = (opsCache[currentIndex]) ? Object.values(opsCache[currentIndex]) : [];
+  ctx.save();
+  list.sort((a,b)=>a.t-b.t).forEach(op=>{
+    if(op.kind==='stroke') drawStroke(ctx, op);
+    else if(op.kind==='clear') { ctx.clearRect(0,0,ctx.canvas.width,ctx.canvas.height); renderSlideTo(ctx, slide); }
+  });
+  ctx.restore();
+}
+
+function drawStroke(ctx, op){
+  ctx.save();
+  if(op.mode==='eraser'){
+    ctx.globalCompositeOperation = 'destination-out';
+    ctx.strokeStyle = 'rgba(0,0,0,1)';
+  } else {
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.strokeStyle = op.color;
   }
-
-  return { stream, stop };
+  ctx.lineWidth = op.size; ctx.lineJoin='round'; ctx.lineCap='round';
+  ctx.beginPath();
+  const pts = op.pts;
+  if(!pts || pts.length===0) return;
+  ctx.moveTo(pts[0].x, pts[0].y);
+  for(let i=1;i<pts.length;i++){ ctx.lineTo(pts[i].x, pts[i].y); }
+  ctx.stroke();
+  ctx.restore();
 }
 
-<!-- ======================== [7] /styles.css ======================== -->
-:root{ --bg:#0b0c10; --fg:#e8e8e8; --muted:#a0a0a0; --card:#151820; --acc:#4e9af1; --warn:#ffcc00; --danger:#f25f5c; }
-*{ box-sizing: border-box; }
-body{ margin:0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Noto Sans JP, sans-serif; color:var(--fg); background:linear-gradient(180deg,#0b0c10,#0e1218); }
-.wrap{ max-width:1000px; margin:0 auto; padding:24px; }
-h1{ font-size:28px; margin:12px 0 18px; }
-h2{ font-size:20px; margin:0 0 12px; }
-.card{ background:var(--card); border:1px solid #242838; border-radius:16px; padding:16px; box-shadow:0 10px 30px rgba(0,0,0,.25); margin-bottom:18px; }
-.row{ display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin:8px 0; }
-.grid-2{ display:grid; grid-template-columns: 1fr; gap:16px; }
-@media(min-width:900px){ .grid-2{ grid-template-columns: 1fr 1fr; } }
-label{ display:flex; align-items:center; gap:8px; }
-input, select{ background:#0f1320; border:1px solid #22263a; color:var(--fg); padding:8px 10px; border-radius:10px; }
-.btn{ background:var(--acc); color:#fff; border:0; padding:10px 14px; border-radius:12px; cursor:pointer; text-decoration:none; display:inline-block; }
-.btn.ghost{ background:transparent; border:1px solid var(--acc); color:var(--acc); }
-.btn.danger{ background:var(--danger); }
-.btn:disabled{ opacity:.5; cursor:not-allowed; }
-video{ width:100%; max-height:45vh; background:#000; border-radius:12px; }
-progress{ width:250px; height:10px; accent-color: var(--acc); }
-.hint{ color:var(--muted); font-size:13px; }
+function canvasPoint(e, canvas){
+  const rect = canvas.getBoundingClientRect();
+  const x = (e.touches? e.touches[0].clientX : e.clientX) - rect.left;
+  const y = (e.touches? e.touches[0].clientY : e.clientY) - rect.top;
+  return {x: Math.max(0, Math.min(canvas.width, x * (canvas.width/rect.width))), y: Math.max(0, Math.min(canvas.height, y * (canvas.height/rect.height)))};
+}
+
+let liveStroke = null; // {pts:[]}
+['mousedown','touchstart'].forEach(ev=>on(board,ev,(e)=>{
+  if(role!=='teacher') return;
+  if(!slides[currentIndex]) return;
+  isDrawing=true; lastPt = canvasPoint(e, board);
+  liveStroke = {kind:'stroke', mode:(drawingState.tool==='eraser'?'eraser':'pen'), color:drawingState.color, size:drawingState.size, pts:[lastPt], t: Date.now()};
+  drawStroke(bctx, liveStroke);
+  e.preventDefault();
+}));
+['mousemove','touchmove'].forEach(ev=>on(board,ev,(e)=>{
+  if(!isDrawing || role!=='teacher') return;
+  const p = canvasPoint(e, board); if(!liveStroke) return;
+  const lp = liveStroke.pts[liveStroke.pts.length-1];
+  const dx=p.x-lp.x, dy=p.y-lp.y; const distSq = dx*dx+dy*dy; if(distSq<1.5) { e.preventDefault(); return; }
+  liveStroke.pts.push(p);
+  // draw incrementally
+  bctx.save();
+  if(liveStroke.mode==='eraser'){ bctx.globalCompositeOperation='destination-out'; bctx.strokeStyle='rgba(0,0,0,1)'; }
+  else { bctx.globalCompositeOperation='source-over'; bctx.strokeStyle=liveStroke.color; }
+  bctx.lineWidth=liveStroke.size; bctx.lineJoin='round'; bctx.lineCap='round';
+  bctx.beginPath(); bctx.moveTo(lp.x,lp.y); bctx.lineTo(p.x,p.y); bctx.stroke(); bctx.restore();
+  e.preventDefault();
+}));
+['mouseup','mouseleave','touchend','touchcancel'].forEach(ev=>on(board,ev,async (e)=>{
+  if(!isDrawing || role!=='teacher') return;
+  isDrawing=false;
+  if(liveStroke && db && room){
+    const id = db.ref().push().key; await opRef(currentIndex).child(id).set(liveStroke);
+  }
+  liveStroke=null; lastPt=null;
+  e.preventDefault();
+}));
+
+on($('#btnClear'),'click', async ()=>{
+  if(role!=='teacher') return;
+  clearCanvas(bctx); await renderSlideTo(bctx, slides[currentIndex]);
+  if(db && room){ const id = db.ref().push().key; await opRef(currentIndex).child(id).set({kind:'clear', t:Date.now()}); }
+});
+
+// Tool UI
+on($('#toolPen'),'click',()=>{ drawingState.tool='pen'; $('#toolPen').classList.add('primary'); $('#toolEraser').classList.remove('primary'); });
+on($('#toolEraser'),'click',()=>{ drawingState.tool='eraser'; $('#toolEraser').classList.add('primary'); $('#toolPen').classList.remove('primary'); });
+$('.swatch[data-color="#1e90ff"]').classList.add('selected');
+Array.from(document.querySelectorAll('.swatch')).forEach(el=> on(el,'click',()=>{ drawingState.color=el.dataset.color; }));
+on($('#penSize'),'input',e=> drawingState.size = +e.target.value);
+
+/********************
+ * 11) Image enhancement (paper white & text colored)
+ ********************/
+async function enhanceImageFile(file, inkColor, thresh){
+  const bmp = await createImageBitmap(file);
+  const c = new OffscreenCanvas(bmp.width, bmp.height);
+  const ctx = c.getContext('2d'); ctx.drawImage(bmp,0,0);
+  const dataUrl = await enhanceImageCanvas(c, inkColor, thresh);
+  return (await fetch(dataUrl)).blob();
+}
+
+async function enhanceImageCanvas(canvasLike, inkColor, thresh){
+  const w = canvasLike.width, h = canvasLike.height;
+  const c = canvasLike instanceof HTMLCanvasElement ? canvasLike : (()=>{ const cv=document.createElement('canvas'); cv.width=w; cv.height=h; const cx=cv.getContext('2d'); cx.drawImage(canvasLike,0,0); return cv; })();
+  const ctx = c.getContext('2d');
+  const img = ctx.getImageData(0,0,w,h); const d = img.data;
+  // 1) grayscale & histogram
+  const hist = new Uint32Array(256);
+  for(let i=0;i<d.length;i+=4){ const g = (d[i]*0.2126 + d[i+1]*0.7152 + d[i+2]*0.0722)|0; d[i]=d[i+1]=d[i+2]=g; hist[g]++; }
+  // 2) Otsu threshold if thresh<0
+  let T = thresh; if(!(T>=0 && T<=255)){
+    const total = w*h; let sum=0; for(let i=0;i<256;i++) sum += i*hist[i]; let sumB=0,wB=0,maxVar=0,t=0;
+    for(let i=0;i<256;i++){ wB += hist[i]; if(wB===0) continue; const wF = total-wB; if(wF===0) break; sumB += i*hist[i]; const mB=sumB/wB, mF=(sum-sumB)/wF; const between = wB*wF*(mB-mF)*(mB-mF); if(between>maxVar){ maxVar=between; t=i; } }
+    T=t;
+  }
+  $('#threshLabel').textContent = (thresh>=0? thresh : `auto:${T}`);
+  // 3) binarize and recolor foreground to inkColor
+  const rgb = hexToRgb(inkColor);
+  for(let i=0;i<d.length;i+=4){ if(d[i] < T){ d[i]=rgb.r; d[i+1]=rgb.g; d[i+2]=rgb.b; d[i+3]=255; } else { d[i]=255; d[i+1]=255; d[i+2]=255; d[i+3]=255; } }
+  ctx.putImageData(img,0,0);
+  return c.toDataURL('image/png');
+}
+
+function hexToRgb(hex){ hex = hex.replace('#',''); if(hex.length===3) hex=hex.split('').map(ch=>ch+ch).join(''); const n=parseInt(hex,16); return {r:(n>>16)&255,g:(n>>8)&255,b:n&255}; }
+
+on($('#threshRange'),'input',e=>{ const v=+e.target.value; $('#threshLabel').textContent = (v>=0? v:'auto'); });
+
+</script>
+</body>
+</html>
