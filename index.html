@@ -3,183 +3,258 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Classroom Canvas (Supabase 無料版)</title>
+<title>Classroom Canvas (Supabase 無料・サニタイズ対応)</title>
 <style>
-body{font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;background:#0b0c10;color:#e8ecf1;margin:0}
-.wrap{max-width:960px;margin:0 auto;padding:16px}
-.card{background:#12151b;border:1px solid #ffffff14;border-radius:12px;padding:12px;margin:12px 0}
-button,input{background:#161a22;color:#e8ecf1;border:1px solid #ffffff26;border-radius:10px;padding:8px 10px}
-button{cursor:pointer}
-canvas{background:#fff;border-radius:12px;border:1px solid #00000022;width:100%;max-width:900px}
-.hidden{display:none}
-.badge{display:inline-block;padding:4px 8px;border-radius:999px;border:1px solid #ffffff26;margin-left:6px;font-size:12px}
+  :root{--bg:#0b0c10;--panel:#12151b;--ink:#e8ecf1;--muted:#9aa4b2}
+  html,body{height:100%}
+  body{margin:0;background:#0b0c10;color:var(--ink);font-family:system-ui,Segoe UI,Inter,Roboto,Arial,sans-serif}
+  .wrap{max-width:980px;margin:0 auto;padding:16px}
+  .card{background:var(--panel);border:1px solid #ffffff17;border-radius:14px;padding:14px;margin:12px 0;box-shadow:0 8px 24px rgba(0,0,0,.25)}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .stack{display:flex;flex-direction:column;gap:8px}
+  button,input{background:#161a22;color:var(--ink);border:1px solid #ffffff26;border-radius:10px;padding:8px 10px}
+  button{cursor:pointer}
+  button.primary{background:linear-gradient(180deg,#1f6feb,#3168ff);border-color:#2b5cff}
+  button.ghost{background:transparent}
+  canvas{background:#fff;border:1px solid #00000022;border-radius:12px;width:100%;max-width:900px}
+  .hidden{display:none}
+  .badge{display:inline-block;padding:4px 8px;border-radius:999px;border:1px solid #ffffff26;margin-left:6px;font-size:12px}
+  .muted{color:var(--muted);font-size:12px}
 </style>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.3.136/pdf.min.js" crossorigin="anonymous"></script>
+<script>pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.3.136/pdf.worker.min.js';</script>
 </head>
 <body>
 <div class="wrap">
   <h2>クラス用キャンバス（Supabase 無料）<span id="badge" class="badge">init…</span></h2>
 
   <div class="card" id="roleCard">
-    <p>役割を選択</p>
-    <button id="asTeacher">先生</button>
-    <button id="asStudent">生徒</button>
+    <div class="stack">
+      <div class="row">
+        <button id="asTeacher" class="primary">先生</button>
+        <button id="asStudent" class="ghost">生徒</button>
+        <span id="infoPill" class="badge">room: -</span>
+      </div>
+      <div class="muted">※ この版は Supabase の Storage（無料）+ Realtime を使用します。バケット名は <code>rooms</code> を作成し、RLSポリシーを付与してください。</div>
+    </div>
   </div>
 
   <div class="card hidden" id="teacherCard">
-    <p>
-      部屋名 <input id="roomName" placeholder="ex) class-2A-math" />
-      <button id="startRoom">部屋を立ち上げ</button>
-      <span id="roomInfo" class="badge">room: -</span>
-    </p>
-    <p>ベース（PDF/画像） <input type="file" id="baseFile" accept=".pdf,image/*" /></p>
-    <canvas id="tCanvas" width="1280" height="720"></canvas>
-    <p>
-      <button id="penBtn">ペン</button>
-      <button id="eraserBtn">消しゴム</button>
-    </p>
+    <div class="stack">
+      <div class="row">
+        <label>部屋名</label>
+        <input id="roomName" placeholder="ex) class-2A-math"/>
+        <button id="startRoom" class="primary">部屋を立ち上げ</button>
+      </div>
+      <div class="row">
+        <input type="file" id="baseFile" accept=".pdf,image/*"/>
+        <span class="muted">PDFは高品質URLを配布、画像はキャンバスにフィット描画</span>
+      </div>
+      <canvas id="tCanvas" width="1280" height="720"></canvas>
+      <div class="row">
+        <button id="penBtn">ペン</button>
+        <button id="eraserBtn">消しゴム</button>
+      </div>
+    </div>
   </div>
 
   <div class="card hidden" id="studentCard">
-    <p>
-      部屋名 <input id="joinName" placeholder="先生からの部屋名" />
-      <button id="joinRoom">入室</button>
-      <span id="joinInfo" class="badge">not joined</span>
-    </p>
-    <canvas id="sCanvas" width="1280" height="720"></canvas>
+    <div class="stack">
+      <div class="row">
+        <label>部屋名</label>
+        <input id="joinName" placeholder="先生からの部屋名"/>
+        <button id="joinRoom" class="primary">入室</button>
+      </div>
+      <canvas id="sCanvas" width="1280" height="720"></canvas>
+    </div>
   </div>
 </div>
 
 <script>
-/* ====== 1) Supabase 接続 ====== */
-const SUPABASE_URL = "https://gskmzbuomlwzdrbaazaj.supabase.co";   // ← あなたのURL
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imdza216YnVvbWx3emRyYmFhemFqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjEwOTY0NDAsImV4cCI6MjA3NjY3MjQ0MH0.fvL6qrnPAavf5l9QjjUx-GBPsz3xjxHyBeY1YYXZlBo";            // ← あなたのanon key
+/**********************
+ * 1) Supabase 接続
+ **********************/
+// ↓↓↓ 必ず自分の URL / KEY に置換してください
+const SUPABASE_URL = "https://YOUR_PROJECT_REF.supabase.co";
+const SUPABASE_ANON_KEY = "YOUR_ANON_KEY";
+const BUCKET = 'rooms';
+
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-document.getElementById('badge').textContent = 'connected';
+const badge = document.getElementById('badge');
+badge.textContent = 'connected';
 
-/* ====== 2) 状態 ====== */
-let role = null;
-let room = null;
-let channel = null;
-let tool = 'pen';
-let drawing = false;
-const tCanvas = document.getElementById('tCanvas');
-const sCanvas = document.getElementById('sCanvas');
-const tctx = tCanvas.getContext('2d');
-const sctx = sCanvas.getContext('2d');
+/**********************
+ * 2) DOM / State
+ **********************/
+let role=null, room=null, roomSlug=null, channel=null;
+let tool='pen', drawing=false;
+const tCanvas=document.getElementById('tCanvas');
+const sCanvas=document.getElementById('sCanvas');
+const tctx=tCanvas.getContext('2d');
+const sctx=sCanvas.getContext('2d');
+const infoPill=document.getElementById('infoPill');
 
-/* ====== 3) 役割切替 ====== */
-document.getElementById('asTeacher').onclick = () => {
-  role = 'teacher';
-  document.getElementById('roleCard').classList.add('hidden');
-  document.getElementById('teacherCard').classList.remove('hidden');
-};
-document.getElementById('asStudent').onclick = () => {
-  role = 'student';
-  document.getElementById('roleCard').classList.add('hidden');
-  document.getElementById('studentCard').classList.remove('hidden');
-};
-
-/* ====== 4) チャンネル接続 ====== */
-async function joinChannel(r) {
-  if (channel) await channel.unsubscribe();
-  channel = sb.channel('room:'+r, { config: { broadcast: { ack: true } } });
-  await channel.subscribe((status) => {
-    // console.log('realtime status:', status);
-  });
+/**********************
+ * 3) サニタイズ関数
+ **********************/
+function slugRoom(name){
+  return String(name||'')
+    .normalize('NFKC')
+    .replace(/[\s/\\]+/g,'-')                // 空白やスラッシュ類をハイフン
+    .replace(/[^\p{L}\p{N}_-]+/gu,'-')       // 文字・数字・_・- 以外をハイフン
+    .replace(/-+/g,'-')
+    .replace(/^-|-$/g,'')
+    .toLowerCase() || 'room';
+}
+function safeFileName(name){
+  name = String(name||'').normalize('NFKC');
+  const idx = name.lastIndexOf('.');
+  const base = (idx>0? name.slice(0,idx):name)
+    .replace(/\s+/g,' ')          // 連続空白→1
+    .trim()
+    .replace(/[\\/#?\[\]*<>:"|]+/g,'-') // 禁止記号→-
+    .replace(/-+/g,'-');
+  const ext = (idx>0? name.slice(idx).toLowerCase():'');
+  return (base||'file') + ext;
 }
 
-/* ====== 5) 先生フロー ====== */
-document.getElementById('startRoom').onclick = async () => {
+/**********************
+ * 4) 役割UI
+ **********************/
+document.getElementById('asTeacher').onclick=()=>{role='teacher';toggleCards();};
+document.getElementById('asStudent').onclick=()=>{role='student';toggleCards();};
+function toggleCards(){
+  document.getElementById('roleCard').classList.add('hidden');
+  document.getElementById(role==='teacher'?'teacherCard':'studentCard').classList.remove('hidden');
+}
+
+/**********************
+ * 5) Realtime チャンネル
+ **********************/
+async function joinChannel(r){
+  if(channel) await channel.unsubscribe();
+  channel = sb.channel('room:'+r,{config:{broadcast:{ack:true}}});
+  await channel.subscribe((status)=>{/* console.log('rt status',status) */});
+}
+
+/**********************
+ * 6) 先生フロー
+ **********************/
+document.getElementById('startRoom').onclick = async ()=>{
   const name = document.getElementById('roomName').value.trim();
-  if (!name) return alert('部屋名を入力');
-  room = name;
-  document.getElementById('roomInfo').textContent = 'room: ' + room;
-  await joinChannel(room);
-  alert('部屋を立ち上げました（Supabase Realtime）');
+  if(!name) return alert('部屋名を入力');
+  room = name; roomSlug = slugRoom(room);
+  infoPill.textContent = 'room: '+roomSlug;
+  await joinChannel(roomSlug);
+  alert('部屋を立ち上げました');
 };
 
-document.getElementById('baseFile').onchange = async (e) => {
-  const file = e.target.files[0]; if (!file) return;
-  if (!room) return alert('先に部屋を立ち上げてください');
+document.getElementById('baseFile').onchange = async (e)=>{
+  const file = e.target.files[0]; if(!file) return; if(!roomSlug) return alert('先に部屋を立ち上げてください');
+  const safeName = safeFileName(file.name);
+  const path = `${roomSlug}/${Date.now()}-${safeName}`; // Date.now() は1回だけ
+  // 上書き禁止（まずは INSERT のみ）：アップデートポリシー不要
+  const up = await sb.storage.from(BUCKET).upload(path, file, { upsert:false });
+  if(up.error){ alert('Upload error: '+up.error.message); return; }
+  const pub = sb.storage.from(BUCKET).getPublicUrl(path).data.publicUrl;
 
-  // ストレージへアップロード（rooms バケット / {room}/...）
-  const filePath = `${room}/${Date.now()}-${file.name}`;
-  const up = await sb.storage.from('rooms').upload(filePath, file, { upsert: true, cacheControl: '3600' });
-  if (up.error) { alert('Upload error: ' + up.error.message); return; }
-  const pub = sb.storage.from('rooms').getPublicUrl(filePath).data.publicUrl;
-
-  // 表示（画像は直接 / PDFは簡易ラスタライズ）
-  const isPDF = file.name.toLowerCase().endsWith('.pdf');
-  if (!isPDF) {
-    const img = new Image(); img.onload = () => {
-      fitDraw(tctx, img, tCanvas);
-    }; img.src = pub;
-  } else {
-    // PDFはブラウザの <embed> で描画したPNGを使う簡易法でもOKだが、
-    // 最小構成としては「PDFはそのまま配布（URL共有）」にして、画像はCanvas表示にする。
-    // ここでは教師キャンバスにも概要を置くため、埋め込み画像を生成せず、簡単なサムネ代替：
+  // ローカル描画（画像はフィット、PDFはテキスト表示）
+  if(/\.pdf$/i.test(safeName)){
     tctx.fillStyle = '#fff'; tctx.fillRect(0,0,tCanvas.width,tCanvas.height);
-    tctx.fillStyle = '#222'; tctx.fillText('PDF を配布中: ' + file.name, 20, 40);
+    tctx.fillStyle = '#222'; tctx.font = '16px sans-serif';
+    tctx.fillText('PDF を配布中: '+safeName, 20, 40);
+  } else {
+    const img = new Image(); img.crossOrigin='anonymous'; img.onload=()=>fitDraw(tctx,img,tCanvas); img.src=pub;
   }
-
-  // 生徒へベースURLを配信
-  await channel.send({ type: 'broadcast', event: 'base', payload: { url: pub, name: file.name } });
+  // 生徒へ配信
+  await channel.send({type:'broadcast', event:'base', payload:{ url: pub, name: safeName }});
 };
 
 // 描画ツール
-document.getElementById('penBtn').onclick = () => tool = 'pen';
-document.getElementById('eraserBtn').onclick = () => tool = 'eraser';
+['penBtn','eraserBtn'].forEach(id=>document.getElementById(id).onclick=()=>{ tool = (id==='eraserBtn'?'eraser':'pen'); });
 
-tCanvas.addEventListener('mousedown', (e) => { if (!room) return; drawing = true; drawPoint(tctx, e.offsetX, e.offsetY, tool); sendPoint(e.offsetX, e.offsetY, tool); });
-tCanvas.addEventListener('mousemove', (e) => { if (!room || !drawing) return; drawPoint(tctx, e.offsetX, e.offsetY, tool); sendPoint(e.offsetX, e.offsetY, tool); });
-['mouseup','mouseleave'].forEach(ev => tCanvas.addEventListener(ev, () => drawing = false));
+// マウス & タッチ描画
+function canvasPoint(e, canvas){
+  const rect=canvas.getBoundingClientRect();
+  const x=(e.touches?e.touches[0].clientX:e.clientX)-rect.left;
+  const y=(e.touches?e.touches[0].clientY:e.clientY)-rect.top;
+  const sx=canvas.width/rect.width, sy=canvas.height/rect.height;
+  return {x: Math.max(0,Math.min(canvas.width, x*sx)), y: Math.max(0,Math.min(canvas.height, y*sy))};
+}
 
-function drawPoint(ctx, x, y, mode){
+function drawPoint(ctx,x,y,mode){
   ctx.save();
-  if (mode === 'eraser') { ctx.globalCompositeOperation = 'destination-out'; ctx.fillStyle = '#000'; ctx.beginPath(); ctx.arc(x, y, 10, 0, Math.PI*2); ctx.fill(); }
-  else { ctx.globalCompositeOperation = 'source-over'; ctx.fillStyle = '#111'; ctx.beginPath(); ctx.arc(x, y, 2, 0, Math.PI*2); ctx.fill(); }
+  if(mode==='eraser'){ ctx.globalCompositeOperation='destination-out'; ctx.fillStyle='#000'; ctx.beginPath(); ctx.arc(x,y,10,0,Math.PI*2); ctx.fill(); }
+  else { ctx.globalCompositeOperation='source-over'; ctx.fillStyle='#111'; ctx.beginPath(); ctx.arc(x,y,2,0,Math.PI*2); ctx.fill(); }
   ctx.restore();
 }
-async function sendPoint(x, y, mode){
-  await channel.send({ type: 'broadcast', event: 'draw', payload: { x, y, mode } });
+
+// 送信を控えめに（8ms単位）
+let sendQueue=[]; let sendTimer=null;
+function queueSend(pt){
+  sendQueue.push(pt);
+  if(sendTimer) return;
+  sendTimer = setTimeout(async ()=>{
+    const batch = sendQueue; sendQueue=[]; sendTimer=null;
+    if(!channel) return; await channel.send({type:'broadcast', event:'draw', payload:{pts:batch}});
+  },8);
 }
 
-/* ====== 6) 生徒フロー ====== */
-document.getElementById('joinRoom').onclick = async () => {
-  const name = document.getElementById('joinName').value.trim();
-  if (!name) return alert('部屋名を入力');
-  room = name;
-  document.getElementById('joinInfo').textContent = 'joined: ' + room;
-  await joinChannel(room);
+function bindDraw(canvas, ctx){
+  const start = (e)=>{ if(!roomSlug) return; drawing=true; const p=canvasPoint(e,canvas); drawPoint(ctx,p.x,p.y,tool); queueSend({x:p.x,y:p.y,mode:tool}); e.preventDefault(); };
+  const move = (e)=>{ if(!drawing) return; const p=canvasPoint(e,canvas); drawPoint(ctx,p.x,p.y,tool); queueSend({x:p.x,y:p.y,mode:tool}); e.preventDefault(); };
+  const end = ()=>{ drawing=false; };
+  canvas.addEventListener('mousedown',start); canvas.addEventListener('mousemove',move); ['mouseup','mouseleave'].forEach(ev=>canvas.addEventListener(ev,end));
+  canvas.addEventListener('touchstart',start,{passive:false}); canvas.addEventListener('touchmove',move,{passive:false}); ['touchend','touchcancel'].forEach(ev=>canvas.addEventListener(ev,end));
+}
+bindDraw(tCanvas,tctx);
 
-  channel.on('broadcast', (msg) => {
-    if (msg.event === 'base') {
-      const { url, name } = msg.payload;
-      const isPDF = (name||'').toLowerCase().endsWith('.pdf');
-      if (!isPDF) {
-        const img = new Image(); img.onload = () => { fitDraw(sctx, img, sCanvas); }; img.src = url;
-      } else {
-        sctx.fillStyle = '#fff'; sctx.fillRect(0,0,sCanvas.width,sCanvas.height);
-        sctx.fillStyle = '#222'; sctx.fillText('PDF 受信: ' + name, 20, 40);
-        // PDFはURLを開けば生徒がそのまま高画質で閲覧できます
+/**********************
+ * 7) 生徒フロー
+ **********************/
+document.getElementById('joinRoom').onclick = async ()=>{
+  const name = document.getElementById('joinName').value.trim(); if(!name) return alert('部屋名を入力');
+  room = name; roomSlug = slugRoom(room); infoPill.textContent='room: '+roomSlug;
+  await joinChannel(roomSlug);
+  // 受信ハンドラ
+  channel.on('broadcast',(msg)=>{
+    if(msg.event==='base'){
+      const {url,name} = msg.payload || {};
+      if(/\.pdf$/i.test(name||'')){
+        // PDFはURLを開けば無劣化閲覧可。ここではキャンバスに表題のみ表示
+        sctx.fillStyle='#fff'; sctx.fillRect(0,0,sCanvas.width,sCanvas.height);
+        sctx.fillStyle='#222'; sctx.font='16px sans-serif';
+        sctx.fillText('PDF 受信: '+(name||'document'),20,40);
         console.log('PDF URL:', url);
+        // もしキャンバスに描画したいなら、pdf.jsで1ページ目を描画:
+        // renderPdfPageToCanvas(url, 1, sCanvas, sctx);
+      } else {
+        const img=new Image(); img.crossOrigin='anonymous'; img.onload=()=>fitDraw(sctx,img,sCanvas); img.src=url;
       }
     }
-    if (msg.event === 'draw') {
-      const { x, y, mode } = msg.payload;
-      drawPoint(sctx, x, y, mode);
+    if(msg.event==='draw'){
+      const pts=(msg.payload&&msg.payload.pts)||[]; for(const p of pts){ drawPoint(sctx,p.x,p.y,p.mode); }
     }
   });
+  alert('入室しました');
 };
 
-/* ====== 7) 共通：画像フィット描画 ====== */
-function fitDraw(ctx, img, canvas){
-  const r = Math.min(canvas.width / img.width, canvas.height / img.height);
-  const w = img.width * r, h = img.height * r;
-  const x = (canvas.width - w) / 2, y = (canvas.height - h) / 2;
-  ctx.clearRect(0,0,canvas.width,canvas.height);
-  ctx.drawImage(img, x, y, w, h);
+/**********************
+ * 8) 補助：画像フィット / PDF描画
+ **********************/
+function fitDraw(ctx,img,canvas){
+  const r=Math.min(canvas.width/img.width, canvas.height/img.height);
+  const w=img.width*r, h=img.height*r; const x=(canvas.width-w)/2, y=(canvas.height-h)/2;
+  ctx.clearRect(0,0,canvas.width,canvas.height); ctx.drawImage(img,x,y,w,h);
+}
+async function renderPdfPageToCanvas(url, pageNum, canvas, ctx){
+  const doc=await pdfjsLib.getDocument(url).promise; const page=await doc.getPage(pageNum);
+  const viewport=page.getViewport({scale:1});
+  const scale=Math.min(canvas.width/viewport.width, canvas.height/viewport.height);
+  const v2=page.getViewport({scale}); const tmp=document.createElement('canvas'); tmp.width=v2.width; tmp.height=v2.height;
+  await page.render({canvasContext: tmp.getContext('2d'), viewport:v2}).promise;
+  const x=(canvas.width-v2.width)/2, y=(canvas.height-v2.height)/2; ctx.clearRect(0,0,canvas.width,canvas.height); ctx.drawImage(tmp,x,y);
 }
 </script>
 </body>
