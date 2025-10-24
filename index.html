@@ -3,93 +3,83 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Classroom Canvas (Supabase 無料・内蔵ビューア活用・二層キャンバス)</title>
+<title>Classroom Canvas — ミニマム版（ゼロから作り直し）</title>
 <style>
   :root{--bg:#0b0c10;--panel:#12151b;--ink:#e8ecf1;--muted:#9aa4b2}
   html,body{height:100%}
-  body{margin:0;background:#0b0c10;color:var(--ink);font-family:system-ui,Segoe UI,Inter,Roboto,Arial,sans-serif}
-  .wrap{max-width:1000px;margin:0 auto;padding:16px}
-  .card{background:var(--panel);border:1px solid #ffffff17;border-radius:14px;padding:14px;margin:12px 0;box-shadow:0 8px 24px rgba(0,0,0,.25)}
-  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-  .stack{display:flex;flex-direction:column;gap:8px}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:system-ui,Inter,Roboto,Arial,sans-serif}
+  .wrap{max-width:980px;margin:0 auto;padding:16px}
+  .card{background:var(--panel);border:1px solid #ffffff22;border-radius:14px;padding:14px;margin:12px 0}
+  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
   button,input{background:#161a22;color:var(--ink);border:1px solid #ffffff26;border-radius:10px;padding:8px 10px}
   button{cursor:pointer}
-  button.primary{background:linear-gradient(180deg,#1f6feb,#3168ff);border-color:#2b5cff}
-  .hidden{display:none}
-  .badge{display:inline-flex;gap:6px;align-items:center;padding:4px 8px;border-radius:999px;border:1px solid #ffffff26;margin-left:6px;font-size:12px}
+  button.primary{background:#245bff}
   .muted{color:var(--muted);font-size:12px}
-
-  .canvasWrap{position:relative;width:100%;max-width:920px;aspect-ratio:16/9;border-radius:12px;border:1px solid #00000022;background:#fff;overflow:hidden}
-  .layer{position:absolute;left:0;top:0;width:100%;height:100%;touch-action:none}
-  iframe.layer{border:0;pointer-events:none;background:#fff}
+  /* ---- ステージ（ベース＋オーバーレイ） ---- */
+  .stage{position:relative;width:100%;max-width:920px;aspect-ratio:16/9;background:#fff;border-radius:12px;overflow:hidden;border:1px solid #00000022}
+  .base{position:absolute;inset:0;border:0;background:#fff;pointer-events:none} /* クリックを上層へ透過 */
+  .imgBase{position:absolute;inset:0;object-fit:contain;pointer-events:none;background:#fff}
+  .overlay{position:absolute;inset:0;touch-action:none} /* 描画用 */
 </style>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
 <body>
 <div class="wrap">
-  <h2>クラス用キャンバス（Supabase 無料）
-    <span id="badge" class="badge">init…</span>
-    <span id="roomPill" class="badge">room: -</span>
-  </h2>
+  <h2>Classroom Canvas — ミニマム（PDF/Officeは内蔵ビューア活用）</h2>
 
   <div class="card" id="roleCard">
-    <div class="stack">
-      <div class="row">
-        <button id="asTeacher" class="primary">先生</button>
-        <button id="asStudent">生徒</button>
-        <span class="badge muted">バケット: <code>rooms</code>（Public）</span>
-      </div>
-      <div class="muted">※ Storage バケット <code>rooms</code> を作成し、SQLで select/insert/update ポリシーを追加してください。</div>
+    <div class="row">
+      <button id="asTeacher" class="primary">先生</button>
+      <button id="asStudent">生徒</button>
+      <span id="badge" class="muted">init…</span>
+    </div>
+    <div class="muted">※ Supabase Storage にバケット <code>rooms</code>（Public）を作成。SQLで select/insert/update のポリシーを <code>to public</code> で付与。</div>
+  </div>
+
+  <div class="card" id="teacherCard" style="display:none">
+    <div class="row">
+      <label>部屋名</label>
+      <input id="roomName" placeholder="ex) class-2A-math"/>
+      <button id="startRoom" class="primary">部屋を立ち上げ</button>
+      <span id="roomPill" class="muted">room: -</span>
+    </div>
+    <div class="row">
+      <input type="file" id="pick" accept=".pdf,.doc,.docx,.ppt,.pptx,image/*"/>
+      <span class="muted">PDF/Officeはブラウザ/Officeのビューアで表示。画像はそのまま。</span>
+    </div>
+    <div class="stage" id="tStage">
+      <iframe id="tFrame" class="base"></iframe>
+      <img id="tImg" class="imgBase" />
+      <canvas id="tCanvas" class="overlay"></canvas>
+    </div>
+    <div class="row">
+      <button id="penBtn">ペン</button>
+      <button id="eraserBtn">消しゴム</button>
+      <label>太さ <input id="size" type="range" min="2" max="24" value="6"></label>
+      <button data-color="#111">●</button>
+      <button data-color="#e53935">●</button>
+      <button data-color="#1e88e5">●</button>
+      <button data-color="#43a047">●</button>
     </div>
   </div>
 
-  <div class="card hidden" id="teacherCard">
-    <div class="stack">
-      <div class="row">
-        <label>部屋名</label>
-        <input id="roomName" placeholder="ex) class-2A-math"/>
-        <button id="startRoom" class="primary">部屋を立ち上げ</button>
-      </div>
-      <div class="row">
-        <input type="file" id="baseFile" accept=".pdf,.doc,.docx,.ppt,.pptx,image/*"/>
-        <span class="muted">PDF/Word/PowerPoint はブラウザ/Officeのビューアをそのまま埋め込み。画像は従来通り。</span>
-      </div>
-      <div class="canvasWrap" id="tWrap">
-        <iframe class="layer" id="tFrame" title="document-view"></iframe>
-        <canvas class="layer" id="tDraw"></canvas>
-      </div>
-      <div class="row">
-        <button id="penBtn">ペン</button>
-        <button id="eraserBtn">消しゴム</button>
-        <label>太さ <input id="sizeRange" type="range" min="1" max="24" value="5"/></label>
-        <label>滑らかさ <input id="smoothRange" type="range" min="0" max="0.9" step="0.05" value="0.5"/></label>
-        <span class="muted">色:</span>
-        <button data-color="#111">●</button>
-        <button data-color="#e53935">●</button>
-        <button data-color="#1e88e5">●</button>
-        <button data-color="#43a047">●</button>
-      </div>
+  <div class="card" id="studentCard" style="display:none">
+    <div class="row">
+      <label>部屋名</label>
+      <input id="joinName" placeholder="先生からの部屋名"/>
+      <button id="joinRoom" class="primary">入室</button>
+      <span id="roomPillS" class="muted">room: -</span>
     </div>
-  </div>
-
-  <div class="card hidden" id="studentCard">
-    <div class="stack">
-      <div class="row">
-        <label>部屋名</label>
-        <input id="joinName" placeholder="先生からの部屋名"/>
-        <button id="joinRoom" class="primary">入室</button>
-      </div>
-      <div class="canvasWrap" id="sWrap">
-        <iframe class="layer" id="sFrame" title="document-view"></iframe>
-        <canvas class="layer" id="sDraw"></canvas>
-      </div>
-      <div class="muted">PDF/Officeは内蔵ビューアでそのまま表示。注釈は上のキャンバスに重ね描き。</div>
+    <div class="stage" id="sStage">
+      <iframe id="sFrame" class="base"></iframe>
+      <img id="sImg" class="imgBase" />
+      <canvas id="sCanvas" class="overlay"></canvas>
     </div>
   </div>
 </div>
 
 <script>
-/************ 1) Supabase 接続（必ず置換） ************/
+/***** 0) 設定（必ず置換） *****/
 const SUPABASE_URL = "https://gskmzbuomlwzdrbaazaj.supabase.co"; // ← あなたのURL
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imdza216YnVvbWx3emRyYmFhemFqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjEwOTY0NDAsImV4cCI6MjA3NjY3MjQ0MH0.fvL6qrnPAavf5l9QjjUx-GBPsz3xjxHyBeY1YYXZlBo";                    // ← あなたのanon key
 const BUCKET = 'rooms';
@@ -97,162 +87,94 @@ const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 const badge = document.getElementById('badge');
 badge.textContent = 'connected';
 
-/************ 2) DOM / State ************/
-let role=null, room=null, roomSlug=null, channel=null;
-let tool='pen', baseSize=5, smoothK=0.5, penColor='#111';
-let drawing=false, stroke=[];
-// layers
-const tFrame=document.getElementById('tFrame');
-const tDraw=document.getElementById('tDraw');
-const sFrame=document.getElementById('sFrame');
-const sDraw=document.getElementById('sDraw');
-const tdc=tDraw.getContext('2d');
-const sdc=sDraw.getContext('2d');
-const roomPill=document.getElementById('roomPill');
+/***** 1) 共有状態 *****/
+let role=null, roomSlug=null, channel=null;
+let penColor = '#111', size = 6, tool='pen';
 
-/************ 3) HiDPI & リサイズ（座標ずれ防止） ************/
-function fitCanvasToBox(canvas){
-  const dpr = window.devicePixelRatio || 1;
-  const rect = canvas.getBoundingClientRect();
-  canvas.width = Math.max(1, Math.round(rect.width*dpr));
-  canvas.height= Math.max(1, Math.round(rect.height*dpr));
-  const ctx = canvas.getContext('2d');
-  ctx.setTransform(dpr,0,0,dpr,0,0);
-  ctx.clearRect(0,0,canvas.width,canvas.height);
-}
-function attachResize(){
-  const resizeAll = ()=>{ [tDraw,sDraw].forEach(c=>c && fitCanvasToBox(c)); };
-  new ResizeObserver(resizeAll).observe(document.getElementById('tWrap'));
-  new ResizeObserver(resizeAll).observe(document.getElementById('sWrap'));
-  window.addEventListener('resize', resizeAll, {passive:true});
-}
-attachResize();
-setTimeout(()=>{ [tDraw,sDraw].forEach(c=>c && fitCanvasToBox(c)); },0);
+/***** 2) サニタイズ（シンプル） *****/
+function slugRoom(s){return String(s||'').normalize('NFKC').replace(/[\s/\\]+/g,'-').replace(/[^\p{L}\p{N}_.-]+/gu,'-').replace(/-+/g,'-').replace(/^-|-$/g,'').toLowerCase()||'room';}
+function safeName(s){const nk=String(s||'').normalize('NFKC');const i=nk.lastIndexOf('.');let base=(i>0?nk.slice(0,i):nk).replace(/\s+/g,'-').replace(/[\\/#?\[\]*<>:"|%]+/g,'-');let ext=(i>0?nk.slice(i).toLowerCase():'').replace(/\s+/g,'');if(!/^\.[a-z0-9]{1,8}$/.test(ext)) ext='';if(!base) base='file';return base+ext;}
 
-/************ 4) サニタイズ（S3安全キー） ************/
-function slugRoom(name){
-  return String(name||'')
-    .normalize('NFKC').replace(/[\s/\\]+/g,'-')
-    .replace(/[^\p{L}\p{N}_.-]+/gu,'-')
-    .replace(/-+/g,'-').replace(/^-|-$/g,'')
-    .toLowerCase() || 'room';
-}
-function safeFileName(name){
-  const nk = String(name||'').normalize('NFKC');
-  const idx = nk.lastIndexOf('.');
-  let base = (idx>0? nk.slice(0,idx):nk).replace(/\s+/g,'-').replace(/[\\/#?\[\]*<>:"|%]+/g,'-').replace(/[^\p{L}\p{N}_.-]+/gu,'-').replace(/-+/g,'-').replace(/^-|-$/g,'');
-  let ext = (idx>0? nk.slice(idx).toLowerCase():'').replace(/\s+/g,'');
-  if(!/^\.[a-z0-9]{1,8}$/.test(ext)) ext='';
-  if(!base) base='file';
-  return base+ext;
-}
+/***** 3) UI 切替 *****/
+document.getElementById('asTeacher').onclick=()=>{role='t';document.getElementById('roleCard').style.display='none';document.getElementById('teacherCard').style.display='block';resizeAll();};
+document.getElementById('asStudent').onclick=()=>{role='s';document.getElementById('roleCard').style.display='none';document.getElementById('studentCard').style.display='block';resizeAll();};
 
-/************ 5) 役割UI ************/
-document.getElementById('asTeacher').onclick=()=>{role='teacher';toggleCards();};
-document.getElementById('asStudent').onclick=()=>{role='student';toggleCards();};
-function toggleCards(){
-  document.getElementById('roleCard').classList.add('hidden');
-  document.getElementById(role==='teacher'?'teacherCard':'studentCard').classList.remove('hidden');
-  setTimeout(()=>{ [tDraw,sDraw].forEach(c=>c && fitCanvasToBox(c)); },0);
-}
+/***** 4) Realtime *****/
+async function join(r){ if(channel) await channel.unsubscribe(); channel = sb.channel('room:'+r,{config:{broadcast:{ack:true}}}); await channel.subscribe(); }
 
-/************ 6) Realtime ************/
-async function joinChannel(r){
-  if(channel) await channel.unsubscribe();
-  channel = sb.channel('room:'+r,{config:{broadcast:{ack:true}}});
-  await channel.subscribe();
-}
+/***** 5) ステージ共通：サイズをCSSピクセルに固定（座標ズレ防止の最短解） *****/
+function fitCanvasToElement(canvas){ const el=canvas; const w=el.clientWidth|0, h=el.clientHeight|0; if(!w||!h) return; canvas.width=w; canvas.height=h; const ctx=canvas.getContext('2d'); ctx.setTransform(1,0,0,1,0,0); ctx.clearRect(0,0,w,h); }
+function resizeAll(){ ['tCanvas','sCanvas'].forEach(id=>{const c=document.getElementById(id); if(c) fitCanvasToElement(c);}); }
+new ResizeObserver(resizeAll).observe(document.body);
 
-/************ 7) 先生：部屋＆ファイル ************/
-document.getElementById('startRoom').onclick = async ()=>{
-  const name = document.getElementById('roomName').value.trim();
-  if(!name) return alert('部屋名を入力');
-  room = name; roomSlug = slugRoom(room);
-  roomPill.textContent='room: '+roomSlug;
-  await joinChannel(roomSlug);
+/***** 6) 先生フロー *****/
+document.getElementById('startRoom').onclick=async()=>{ const name=document.getElementById('roomName').value.trim(); if(!name) return alert('部屋名'); roomSlug=slugRoom(name); document.getElementById('roomPill').textContent='room: '+roomSlug; await join(roomSlug); };
+
+document.getElementById('pick').onchange=async(e)=>{
+  const f=e.target.files[0]; if(!f||!roomSlug) return;
+  const name=safeName(f.name); const path=`${roomSlug}/${Date.now()}-${name}`;
+  const up=await sb.storage.from(BUCKET).upload(path, f, {upsert:false, cacheControl:'3600', contentType:f.type||''});
+  if(up.error){ alert('Upload error: '+up.error.message); return; }
+  const url=sb.storage.from(BUCKET).getPublicUrl(path).data.publicUrl;
+  showBase('t', url, name);
+  if(channel) await channel.send({type:'broadcast', event:'base', payload:{url, name}});
 };
 
-document.getElementById('baseFile').onchange = async (e)=>{
-  const file = e.target.files[0]; if(!file) return; if(!roomSlug) return alert('先に部屋を立ち上げ');
-  const safeName = safeFileName(file.name);
-  const filePath = `${roomSlug}/${Date.now()}-${safeName}`;
-  try{
-    const up = await sb.storage.from(BUCKET).upload(filePath, file, { upsert:false, cacheControl:'3600', contentType: file.type || '' });
-    if(up.error){ alert('Upload error: '+up.error.message); return; }
-    const pubUrl = sb.storage.from(BUCKET).getPublicUrl(filePath).data.publicUrl;
-
-    // 拡張子でビューアを切替
-    const lower = safeName.toLowerCase();
-    if(lower.endsWith('.pdf')){
-      tFrame.src = pubUrl + '#toolbar=0&view=FitH&zoom=page-width';
-    } else if(/\.(doc|docx|ppt|pptx)$/.test(lower)){
-      tFrame.src = 'https://view.officeapps.live.com/op/embed.aspx?src=' + encodeURIComponent(pubUrl);
-    } else {
-      // 画像なら <iframe> ではなく直接重ねて表示（背景にIMGを入れたい場合はここで実装可能）
-      tFrame.src = 'about:blank';
-      const img = new Image(); img.onload=()=>{ const ctx=tdc; ctx.clearRect(0,0,tDraw.width,tDraw.height); ctx.drawImage(img, 0, 0, tDraw.width, tDraw.height); }; img.src=pubUrl;
-    }
-
-    // 描画レイヤはクリア（ベースには触らない）
-    tdc.clearRect(0,0,tDraw.width,tDraw.height);
-
-    await channel.send({ type:'broadcast', event:'base', payload:{ url: pubUrl, name: safeName } });
-  }catch(err){ console.error(err); alert('Failed to fetch: URL/KEY/HTTP配信を確認'); }
-};
-
-/************ 8) ペン/消しゴム（描画層のみを編集） ************/
-function lerp(a,b,t){ return a + (b-a)*t; }
-function dist(a,b){ const dx=a.x-b.x, dy=a.y-b.y; return Math.hypot(dx,dy); }
-function fitCanvas(canvas){ const dpr=window.devicePixelRatio||1; const r=canvas.getBoundingClientRect(); canvas.width=Math.max(1,Math.round(r.width*dpr)); canvas.height=Math.max(1,Math.round(r.height*dpr)); const c=canvas.getContext('2d'); c.setTransform(dpr,0,0,dpr,0,0); }
-function ptFromEvt(e, canvas){ const r=canvas.getBoundingClientRect(); const dpr=window.devicePixelRatio||1; const x=(e.touches?e.touches[0].clientX:e.clientX)-r.left; const y=(e.touches?e.touches[0].clientY:e.clientY)-r.top; return {x:x*dpr, y:y*dpr, t:performance.now(), p:(e.pressure>0?e.pressure:0.7)}; }
-function drawSmooth(ctx, pts, color, size){ if(pts.length<2){ const p=pts[0]; ctx.fillStyle=color; ctx.beginPath(); ctx.arc(p.x,p.y,size/2,0,Math.PI*2); ctx.fill(); return; } ctx.save(); ctx.globalCompositeOperation='source-over'; ctx.strokeStyle=color; ctx.lineCap='round'; ctx.lineJoin='round'; ctx.beginPath(); for(let i=0;i<pts.length-1;i++){ const p0=pts[i-1]||pts[i], p1=pts[i], p2=pts[i+1], p3=pts[i+2]||p2; const cp1x=p1.x+(p2.x-p0.x)/6, cp1y=p1.y+(p2.y-p0.y)/6; const cp2x=p2.x-(p3.x-p1.x)/6, cp2y=p2.y-(p3.y-p1.y)/6; if(i===0) ctx.moveTo(p1.x,p1.y); const sp=Math.max(0.001,(p2.t-p1.t)); const v=dist(p1,p2)/sp; const w1=Math.max(1,size*(1/(1+v*0.6))*(p1.p||1)); const w2=Math.max(1,size*(1/(1+v*0.6))*(p2.p||1)); ctx.lineWidth=(w1+w2)/2; ctx.bezierCurveTo(cp1x,cp1y,cp2x,cp2y,p2.x,p2.y);} ctx.stroke(); ctx.restore(); }
-function eraseStroke(ctx, from, to, radius){ ctx.save(); ctx.globalCompositeOperation='destination-out'; ctx.strokeStyle='rgba(0,0,0,1)'; ctx.lineCap='round'; ctx.lineJoin='round'; ctx.lineWidth=radius*2; ctx.beginPath(); ctx.moveTo(from.x,from.y); ctx.lineTo(to.x,to.y); ctx.stroke(); ctx.restore(); }
-
-function bindDraw(canvas, ctx, isTeacher){
-  let last=null; let buf=[]; let raf=null; fitCanvas(canvas);
-  const flush = ()=>{ if(!channel||!isTeacher||buf.length===0) return; const batch=buf; buf=[]; channel.send({type:'broadcast',event:'draw',payload:{pts:batch}}); };
-  const start = (e)=>{ if(!roomSlug) return; drawing=true; stroke=[]; last=null; handle(e); e.preventDefault(); };
-  const move  = (e)=>{ if(!drawing) return; handle(e); e.preventDefault(); };
-  const end   = ()=>{ drawing=false; flush(); };
-  function handle(e){ const pt=ptFromEvt(e, canvas); if(last){ const d=dist(last,pt); const step=Math.max(1,1+Math.floor(d*(1-smoothK))); for(let i=1;i<=step;i++){ const t=i/step; stroke.push({x:lerp(last.x,pt.x,t), y:lerp(last.y,pt.y,t), t:lerp(last.t,pt.t,t), p:lerp(last.p,pt.p,t)});} if(tool==='eraser') eraseStroke(ctx,last,pt,baseSize*1.2); else { cancelAnimationFrame(raf); raf=requestAnimationFrame(()=> drawSmooth(ctx, stroke.slice(-Math.max(6, step*2)), penColor, baseSize)); } } else { stroke.push(pt); } last=pt; buf.push({x:pt.x,y:pt.y,mode:tool,size:baseSize,color:penColor,t:pt.t,p:pt.p}); if(buf.length>64) flush(); }
-  canvas.addEventListener('pointerdown', start); canvas.addEventListener('pointermove', move); window.addEventListener('pointerup', end);
-  canvas.addEventListener('touchstart', start, {passive:false}); canvas.addEventListener('touchmove',  move,  {passive:false}); window.addEventListener('touchend', end);
-}
-
-bindDraw(tDraw, tdc, true);
-['penBtn','eraserBtn'].forEach(id=>document.getElementById(id).onclick=()=>{ tool=(id==='eraserBtn'?'eraser':'pen'); });
-document.getElementById('sizeRange').oninput=(e)=> baseSize=+e.target.value;
-document.getElementById('smoothRange').oninput=(e)=> smoothK=+e.target.value;
-Array.from(document.querySelectorAll('[data-color]')).forEach(el=> el.addEventListener('click',()=>{ penColor = el.dataset.color; }));
-
-/************ 9) 生徒受信（同じロジックでiframeへ表示） ************/
-document.getElementById('joinRoom').onclick = async ()=>{
-  const name = document.getElementById('joinName').value.trim(); if(!name) return alert('部屋名を入力');
-  room = name; roomSlug = slugRoom(room); document.getElementById('roomPill').textContent='room: '+roomSlug;
-  await joinChannel(roomSlug);
-  [sDraw].forEach(c=>fitCanvasToBox(c));
-
-  channel.on('broadcast',(msg)=>{
-    if(msg.event==='base'){
-      const {url,name} = msg.payload||{}; const lower=(name||'').toLowerCase();
-      if(lower.endsWith('.pdf')){
-        sFrame.src = url + '#toolbar=0&view=FitH&zoom=page-width';
-      } else if(/\.(doc|docx|ppt|pptx)$/.test(lower)){
-        sFrame.src = 'https://view.officeapps.live.com/op/embed.aspx?src=' + encodeURIComponent(url);
-      } else {
-        sFrame.src = url; // 画像はそのまま表示される（多くのブラウザでOK）
-      }
-      sdc.clearRect(0,0,sDraw.width,sDraw.height);
-    }
-    if(msg.event==='draw'){
-      const pts=(msg.payload&&msg.payload.pts)||[]; if(!pts.length) return;
-      let last=null; const chunk=[]; const smooth=1-smoothK;
-      for(const p of pts){ if(last){ const d=dist(last,p); const step=Math.max(1,1+Math.floor(d*smooth)); for(let i=1;i<=step;i++){ const t=i/step; chunk.push({x:lerp(last.x,p.x,t), y:lerp(last.y,p.y,t), t:0, p:1}); } } else { chunk.push({x:p.x,y:p.y,t:0,p:1}); } last=p; }
-      if((pts[0]||{}).mode==='eraser'){ for(let i=1;i<chunk.length;i++){ eraseStroke(sdc, chunk[i-1], chunk[i], (pts[0].size||baseSize)*1.2); } }
-      else { drawSmooth(sdc, chunk, (pts[0]&&pts[0].color)||penColor, (pts[0]&&pts[0].size)||baseSize); }
-    }
+/***** 7) 生徒フロー *****/
+document.getElementById('joinRoom').onclick=async()=>{
+  const name=document.getElementById('joinName').value.trim(); if(!name) return alert('部屋名');
+  roomSlug=slugRoom(name); document.getElementById('roomPillS').textContent='room: '+roomSlug; await join(roomSlug);
+  channel.on('broadcast', (msg)=>{
+    if(msg.event==='base'){ const {url,name}=msg.payload||{}; showBase('s', url, name); clearCanvas('s'); }
+    if(msg.event==='draw'){ const pts=(msg.payload&&msg.payload.pts)||[]; replayDraw('s', pts); }
   });
 };
+
+/***** 8) ベース表示（PDF/Office/画像を最短経路で表示） *****/
+function showBase(which, url, name){
+  const lower=(name||'').toLowerCase();
+  const frame = document.getElementById(which==='t'?'tFrame':'sFrame');
+  const img   = document.getElementById(which==='t'?'tImg':'sImg');
+  // まず全部消す
+  frame.src='about:blank'; img.src=''; img.style.display='none';
+  if(lower.endsWith('.pdf')){
+    // Chrome内蔵ビューア（多くの環境でOK）。X-Frame-Optionsで弾かれたら Office Viewer にフォールバック。
+    const tryUrl = url + '#toolbar=0&view=FitH&zoom=page-width';
+    frame.src = tryUrl;
+    // フォールバック：Office Viewer
+    setTimeout(()=>{ if(!frame.contentWindow){ frame.src = 'https://view.officeapps.live.com/op/embed.aspx?src='+encodeURIComponent(url); } }, 800);
+  } else if(/\.(doc|docx|ppt|pptx)$/.test(lower)){
+    frame.src = 'https://view.officeapps.live.com/op/embed.aspx?src='+encodeURIComponent(url);
+  } else {
+    // 画像
+    img.style.display='block'; img.src=url; // object-fit:contain 相当
+  }
+}
+
+/***** 9) 描画（上層のみ編集・CSSピクセル座標） *****/
+function clearCanvas(which){ const c=document.getElementById(which==='t'?'tCanvas':'sCanvas'); const ctx=c.getContext('2d'); ctx.clearRect(0,0,c.width,c.height); }
+function bindDraw(){
+  const c=document.getElementById('tCanvas'); const ctx=c.getContext('2d');
+  let drawing=false, last=null, buffer=[];
+  const start=(e)=>{ if(!roomSlug) return; drawing=true; last=pt(e,c); push(last); e.preventDefault(); };
+  const move =(e)=>{ if(!drawing) return; const p=pt(e,c); stroke(ctx,last,p); last=p; push(p); e.preventDefault(); };
+  const end  =()=>{ if(!drawing) return; drawing=false; flush(); };
+  function pt(e,canvas){ const r=canvas.getBoundingClientRect(); const x=(e.touches?e.touches[0].clientX:e.clientX)-r.left; const y=(e.touches?e.touches[0].clientY:e.clientY)-r.top; return {x,y,mode:tool,size,color:penColor}; }
+  function stroke(ctx,a,b){ if(tool==='eraser'){ ctx.save(); ctx.globalCompositeOperation='destination-out'; ctx.lineWidth=size*2; ctx.lineCap='round'; ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.stroke(); ctx.restore(); } else { ctx.save(); ctx.strokeStyle=penColor; ctx.lineWidth=size; ctx.lineCap='round'; ctx.beginPath(); ctx.moveTo(a.x,a.y); // 簡易スムージング
+      ctx.quadraticCurveTo((a.x+b.x)/2,(a.y+b.y)/2,b.x,b.y); ctx.stroke(); ctx.restore(); } }
+  function push(p){ buffer.push(p); if(buffer.length>64) flush(); }
+  async function flush(){ if(!channel||buffer.length===0) return; const batch=buffer; buffer=[]; await channel.send({type:'broadcast',event:'draw',payload:{pts:batch}}); }
+  c.addEventListener('pointerdown',start); c.addEventListener('pointermove',move); window.addEventListener('pointerup',end);
+  c.addEventListener('touchstart',start,{passive:false}); c.addEventListener('touchmove',move,{passive:false}); window.addEventListener('touchend',end);
+}
+bindDraw();
+function replayDraw(which, pts){ const c=document.getElementById(which==='t'?'tCanvas':'sCanvas'); const ctx=c.getContext('2d'); for(let i=1;i<pts.length;i++){ const a=pts[i-1], b=pts[i]; if(b.mode==='eraser'){ ctx.save(); ctx.globalCompositeOperation='destination-out'; ctx.lineWidth=(b.size||size)*2; ctx.lineCap='round'; ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.stroke(); ctx.restore(); } else { ctx.save(); ctx.strokeStyle=b.color||penColor; ctx.lineWidth=b.size||size; ctx.lineCap='round'; ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.quadraticCurveTo((a.x+b.x)/2,(a.y+b.y)/2,b.x,b.y); ctx.stroke(); ctx.restore(); } } }
+
+/***** 10) ツールUI *****/
+document.getElementById('penBtn').onclick=()=>tool='pen';
+document.getElementById('eraserBtn').onclick=()=>tool='eraser';
+document.getElementById('size').oninput=(e)=>size=+e.target.value;
+Array.from(document.querySelectorAll('[data-color]')).forEach(el=> el.onclick=()=> penColor = el.dataset.color);
 </script>
 </body>
 </html>
