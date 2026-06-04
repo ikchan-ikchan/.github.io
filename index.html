@@ -1,180 +1,281 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Classroom Canvas — ミニマム版（ゼロから作り直し）</title>
-<style>
-  :root{--bg:#0b0c10;--panel:#12151b;--ink:#e8ecf1;--muted:#9aa4b2}
-  html,body{height:100%}
-  body{margin:0;background:var(--bg);color:var(--ink);font-family:system-ui,Inter,Roboto,Arial,sans-serif}
-  .wrap{max-width:980px;margin:0 auto;padding:16px}
-  .card{background:var(--panel);border:1px solid #ffffff22;border-radius:14px;padding:14px;margin:12px 0}
-  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-  button,input{background:#161a22;color:var(--ink);border:1px solid #ffffff26;border-radius:10px;padding:8px 10px}
-  button{cursor:pointer}
-  button.primary{background:#245bff}
-  .muted{color:var(--muted);font-size:12px}
-  /* ---- ステージ（ベース＋オーバーレイ） ---- */
-  .stage{position:relative;width:100%;max-width:920px;aspect-ratio:16/9;background:#fff;border-radius:12px;overflow:hidden;border:1px solid #00000022}
-  .base{position:absolute;inset:0;border:0;background:#fff;pointer-events:none} /* クリックを上層へ透過 */
-  .imgBase{position:absolute;inset:0;object-fit:contain;pointer-events:none;background:#fff}
-  .overlay{position:absolute;inset:0;touch-action:none} /* 描画用 */
-</style>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NFC Read / Write</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      padding: 16px;
+      line-height: 1.6;
+      background: #f5f5f5;
+    }
+
+    h1 {
+      font-size: 24px;
+    }
+
+    .card {
+      background: white;
+      padding: 16px;
+      margin-bottom: 16px;
+      border-radius: 12px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    }
+
+    button, select, textarea, input {
+      font-size: 16px;
+      margin-top: 8px;
+    }
+
+    button {
+      padding: 10px 14px;
+      border: none;
+      border-radius: 8px;
+      background: #222;
+      color: white;
+    }
+
+    button:disabled {
+      background: #999;
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 100px;
+      box-sizing: border-box;
+    }
+
+    pre {
+      white-space: pre-wrap;
+      word-break: break-word;
+      background: #eee;
+      padding: 12px;
+      border-radius: 8px;
+    }
+  </style>
 </head>
 <body>
-<div class="wrap">
-  <h2>Classroom Canvas — ミニマム（PDF/Officeは内蔵ビューア活用）</h2>
+  <h1>NFC Read / Write</h1>
 
-  <div class="card" id="roleCard">
-    <div class="row">
-      <button id="asTeacher" class="primary">先生</button>
-      <button id="asStudent">生徒</button>
-      <span id="badge" class="muted">init…</span>
-    </div>
-    <div class="muted">※ Supabase Storage にバケット <code>rooms</code>（Public）を作成。SQLで select/insert/update のポリシーを <code>to public</code> で付与。</div>
+  <div class="card">
+    <h2>読み取り</h2>
+    <button id="startScan">読み取り開始</button>
+    <button id="stopScan" disabled>停止</button>
+    <pre id="readOutput">まだ読み取っていません</pre>
   </div>
 
-  <div class="card" id="teacherCard" style="display:none">
-    <div class="row">
-      <label>部屋名</label>
-      <input id="roomName" placeholder="ex) class-2A-math"/>
-      <button id="startRoom" class="primary">部屋を立ち上げ</button>
-      <span id="roomPill" class="muted">room: -</span>
-    </div>
-    <div class="row">
-      <input type="file" id="pick" accept=".pdf,.doc,.docx,.ppt,.pptx,image/*"/>
-      <span class="muted">PDF/Officeはブラウザ/Officeのビューアで表示。画像はそのまま。</span>
-    </div>
-    <div class="stage" id="tStage">
-      <iframe id="tFrame" class="base"></iframe>
-      <img id="tImg" class="imgBase" />
-      <canvas id="tCanvas" class="overlay"></canvas>
-    </div>
-    <div class="row">
-      <button id="penBtn">ペン</button>
-      <button id="eraserBtn">消しゴム</button>
-      <label>太さ <input id="size" type="range" min="2" max="24" value="6"></label>
-      <button data-color="#111">●</button>
-      <button data-color="#e53935">●</button>
-      <button data-color="#1e88e5">●</button>
-      <button data-color="#43a047">●</button>
-    </div>
+  <div class="card">
+    <h2>書き込み</h2>
+
+    <label>
+      書き込む形式：
+      <select id="writeType">
+        <option value="text">テキスト</option>
+        <option value="url">URL</option>
+        <option value="json">JSON</option>
+      </select>
+    </label>
+
+    <textarea id="writeData">こんにちは NFC</textarea>
+
+    <label>
+      <input type="checkbox" id="overwrite" checked>
+      既存データを上書きする
+    </label>
+
+    <br>
+
+    <button id="writeButton">タグに書き込む</button>
+
+    <pre id="writeOutput">まだ書き込んでいません</pre>
   </div>
 
-  <div class="card" id="studentCard" style="display:none">
-    <div class="row">
-      <label>部屋名</label>
-      <input id="joinName" placeholder="先生からの部屋名"/>
-      <button id="joinRoom" class="primary">入室</button>
-      <span id="roomPillS" class="muted">room: -</span>
-    </div>
-    <div class="stage" id="sStage">
-      <iframe id="sFrame" class="base"></iframe>
-      <img id="sImg" class="imgBase" />
-      <canvas id="sCanvas" class="overlay"></canvas>
-    </div>
+  <div class="card">
+    <h2>注意</h2>
+    <p>
+      Android Chromeで開いてください。NFCをONにしてください。
+      対応するのは基本的にNDEF形式のNFCタグです。
+    </p>
   </div>
-</div>
 
-<script>
-/***** 0) 設定（必ず置換） *****/
-const SUPABASE_URL = "https://gskmzbuomlwzdrbaazaj.supabase.co"; // ← あなたのURL
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imdza216YnVvbWx3emRyYmFhemFqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjEwOTY0NDAsImV4cCI6MjA3NjY3MjQ0MH0.fvL6qrnPAavf5l9QjjUx-GBPsz3xjxHyBeY1YYXZlBo";                    // ← あなたのanon key
-const BUCKET = 'rooms';
-const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-const badge = document.getElementById('badge');
-badge.textContent = 'connected';
+  <script>
+    const readOutput = document.getElementById("readOutput");
+    const writeOutput = document.getElementById("writeOutput");
+    const startScanButton = document.getElementById("startScan");
+    const stopScanButton = document.getElementById("stopScan");
+    const writeButton = document.getElementById("writeButton");
 
-/***** 1) 共有状態 *****/
-let role=null, roomSlug=null, channel=null;
-let penColor = '#111', size = 6, tool='pen';
+    let abortController = null;
 
-/***** 2) サニタイズ（シンプル） *****/
-function slugRoom(s){return String(s||'').normalize('NFKC').replace(/[\s/\\]+/g,'-').replace(/[^\p{L}\p{N}_.-]+/gu,'-').replace(/-+/g,'-').replace(/^-|-$/g,'').toLowerCase()||'room';}
-function safeName(s){const nk=String(s||'').normalize('NFKC');const i=nk.lastIndexOf('.');let base=(i>0?nk.slice(0,i):nk).replace(/\s+/g,'-').replace(/[\\/#?\[\]*<>:"|%]+/g,'-');let ext=(i>0?nk.slice(i).toLowerCase():'').replace(/\s+/g,'');if(!/^\.[a-z0-9]{1,8}$/.test(ext)) ext='';if(!base) base='file';return base+ext;}
+    function checkSupport() {
+      if (!("NDEFReader" in window)) {
+        const message = "このブラウザはWeb NFCに対応していません。Android版Chromeで開いてください。";
+        readOutput.textContent = message;
+        writeOutput.textContent = message;
+        startScanButton.disabled = true;
+        writeButton.disabled = true;
+        return false;
+      }
+      return true;
+    }
 
-/***** 3) UI 切替 *****/
-document.getElementById('asTeacher').onclick=()=>{role='t';document.getElementById('roleCard').style.display='none';document.getElementById('teacherCard').style.display='block';resizeAll();};
-document.getElementById('asStudent').onclick=()=>{role='s';document.getElementById('roleCard').style.display='none';document.getElementById('studentCard').style.display='block';resizeAll();};
+    function dataViewToHex(dataView) {
+      if (!dataView) return "";
+      const bytes = new Uint8Array(
+        dataView.buffer,
+        dataView.byteOffset,
+        dataView.byteLength
+      );
+      return Array.from(bytes)
+        .map(b => b.toString(16).padStart(2, "0").toUpperCase())
+        .join(" ");
+    }
 
-/***** 4) Realtime *****/
-async function join(r){ if(channel) await channel.unsubscribe(); channel = sb.channel('room:'+r,{config:{broadcast:{ack:true}}}); await channel.subscribe(); }
+    function decodeRecord(record) {
+      if (!record.data) {
+        return "(データなし)";
+      }
 
-/***** 5) ステージ共通：サイズをCSSピクセルに固定（座標ズレ防止の最短解） *****/
-function fitCanvasToElement(canvas){ const el=canvas; const w=el.clientWidth|0, h=el.clientHeight|0; if(!w||!h) return; canvas.width=w; canvas.height=h; const ctx=canvas.getContext('2d'); ctx.setTransform(1,0,0,1,0,0); ctx.clearRect(0,0,w,h); }
-function resizeAll(){ ['tCanvas','sCanvas'].forEach(id=>{const c=document.getElementById(id); if(c) fitCanvasToElement(c);}); }
-new ResizeObserver(resizeAll).observe(document.body);
+      try {
+        if (record.recordType === "text") {
+          const decoder = new TextDecoder(record.encoding || "utf-8");
+          return decoder.decode(record.data);
+        }
 
-/***** 6) 先生フロー *****/
-document.getElementById('startRoom').onclick=async()=>{ const name=document.getElementById('roomName').value.trim(); if(!name) return alert('部屋名'); roomSlug=slugRoom(name); document.getElementById('roomPill').textContent='room: '+roomSlug; await join(roomSlug); };
+        if (record.recordType === "url" || record.recordType === "absolute-url") {
+          const decoder = new TextDecoder();
+          return decoder.decode(record.data);
+        }
 
-document.getElementById('pick').onchange=async(e)=>{
-  const f=e.target.files[0]; if(!f||!roomSlug) return;
-  const name=safeName(f.name); const path=`${roomSlug}/${Date.now()}-${name}`;
-  const up=await sb.storage.from(BUCKET).upload(path, f, {upsert:false, cacheControl:'3600', contentType:f.type||''});
-  if(up.error){ alert('Upload error: '+up.error.message); return; }
-  const url=sb.storage.from(BUCKET).getPublicUrl(path).data.publicUrl;
-  showBase('t', url, name);
-  if(channel) await channel.send({type:'broadcast', event:'base', payload:{url, name}});
-};
+        if (record.recordType === "mime") {
+          const decoder = new TextDecoder();
+          const text = decoder.decode(record.data);
 
-/***** 7) 生徒フロー *****/
-document.getElementById('joinRoom').onclick=async()=>{
-  const name=document.getElementById('joinName').value.trim(); if(!name) return alert('部屋名');
-  roomSlug=slugRoom(name); document.getElementById('roomPillS').textContent='room: '+roomSlug; await join(roomSlug);
-  channel.on('broadcast', (msg)=>{
-    if(msg.event==='base'){ const {url,name}=msg.payload||{}; showBase('s', url, name); clearCanvas('s'); }
-    if(msg.event==='draw'){ const pts=(msg.payload&&msg.payload.pts)||[]; replayDraw('s', pts); }
-  });
-};
+          if (record.mediaType === "application/json") {
+            return JSON.stringify(JSON.parse(text), null, 2);
+          }
 
-/***** 8) ベース表示（PDF/Office/画像を最短経路で表示） *****/
-function showBase(which, url, name){
-  const lower=(name||'').toLowerCase();
-  const frame = document.getElementById(which==='t'?'tFrame':'sFrame');
-  const img   = document.getElementById(which==='t'?'tImg':'sImg');
-  // まず全部消す
-  frame.src='about:blank'; img.src=''; img.style.display='none';
-  if(lower.endsWith('.pdf')){
-    // Chrome内蔵ビューア（多くの環境でOK）。X-Frame-Optionsで弾かれたら Office Viewer にフォールバック。
-    const tryUrl = url + '#toolbar=0&view=FitH&zoom=page-width';
-    frame.src = tryUrl;
-    // フォールバック：Office Viewer
-    setTimeout(()=>{ if(!frame.contentWindow){ frame.src = 'https://view.officeapps.live.com/op/embed.aspx?src='+encodeURIComponent(url); } }, 800);
-  } else if(/\.(doc|docx|ppt|pptx)$/.test(lower)){
-    frame.src = 'https://view.officeapps.live.com/op/embed.aspx?src='+encodeURIComponent(url);
-  } else {
-    // 画像
-    img.style.display='block'; img.src=url; // object-fit:contain 相当
-  }
-}
+          return text;
+        }
 
-/***** 9) 描画（上層のみ編集・CSSピクセル座標） *****/
-function clearCanvas(which){ const c=document.getElementById(which==='t'?'tCanvas':'sCanvas'); const ctx=c.getContext('2d'); ctx.clearRect(0,0,c.width,c.height); }
-function bindDraw(){
-  const c=document.getElementById('tCanvas'); const ctx=c.getContext('2d');
-  let drawing=false, last=null, buffer=[];
-  const start=(e)=>{ if(!roomSlug) return; drawing=true; last=pt(e,c); push(last); e.preventDefault(); };
-  const move =(e)=>{ if(!drawing) return; const p=pt(e,c); stroke(ctx,last,p); last=p; push(p); e.preventDefault(); };
-  const end  =()=>{ if(!drawing) return; drawing=false; flush(); };
-  function pt(e,canvas){ const r=canvas.getBoundingClientRect(); const x=(e.touches?e.touches[0].clientX:e.clientX)-r.left; const y=(e.touches?e.touches[0].clientY:e.clientY)-r.top; return {x,y,mode:tool,size,color:penColor}; }
-  function stroke(ctx,a,b){ if(tool==='eraser'){ ctx.save(); ctx.globalCompositeOperation='destination-out'; ctx.lineWidth=size*2; ctx.lineCap='round'; ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.stroke(); ctx.restore(); } else { ctx.save(); ctx.strokeStyle=penColor; ctx.lineWidth=size; ctx.lineCap='round'; ctx.beginPath(); ctx.moveTo(a.x,a.y); // 簡易スムージング
-      ctx.quadraticCurveTo((a.x+b.x)/2,(a.y+b.y)/2,b.x,b.y); ctx.stroke(); ctx.restore(); } }
-  function push(p){ buffer.push(p); if(buffer.length>64) flush(); }
-  async function flush(){ if(!channel||buffer.length===0) return; const batch=buffer; buffer=[]; await channel.send({type:'broadcast',event:'draw',payload:{pts:batch}}); }
-  c.addEventListener('pointerdown',start); c.addEventListener('pointermove',move); window.addEventListener('pointerup',end);
-  c.addEventListener('touchstart',start,{passive:false}); c.addEventListener('touchmove',move,{passive:false}); window.addEventListener('touchend',end);
-}
-bindDraw();
-function replayDraw(which, pts){ const c=document.getElementById(which==='t'?'tCanvas':'sCanvas'); const ctx=c.getContext('2d'); for(let i=1;i<pts.length;i++){ const a=pts[i-1], b=pts[i]; if(b.mode==='eraser'){ ctx.save(); ctx.globalCompositeOperation='destination-out'; ctx.lineWidth=(b.size||size)*2; ctx.lineCap='round'; ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.stroke(); ctx.restore(); } else { ctx.save(); ctx.strokeStyle=b.color||penColor; ctx.lineWidth=b.size||size; ctx.lineCap='round'; ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.quadraticCurveTo((a.x+b.x)/2,(a.y+b.y)/2,b.x,b.y); ctx.stroke(); ctx.restore(); } } }
+        const decoder = new TextDecoder();
+        return decoder.decode(record.data);
+      } catch (e) {
+        return "デコード不可。HEX: " + dataViewToHex(record.data);
+      }
+    }
 
-/***** 10) ツールUI *****/
-document.getElementById('penBtn').onclick=()=>tool='pen';
-document.getElementById('eraserBtn').onclick=()=>tool='eraser';
-document.getElementById('size').oninput=(e)=>size=+e.target.value;
-Array.from(document.querySelectorAll('[data-color]')).forEach(el=> el.onclick=()=> penColor = el.dataset.color);
-</script>
+    startScanButton.addEventListener("click", async () => {
+      if (!checkSupport()) return;
+
+      try {
+        abortController = new AbortController();
+
+        const ndef = new NDEFReader();
+        await ndef.scan({ signal: abortController.signal });
+
+        startScanButton.disabled = true;
+        stopScanButton.disabled = false;
+
+        readOutput.textContent = "読み取り待機中。NFCタグをスマホの背面にかざしてください。";
+
+        ndef.addEventListener("reading", event => {
+          let text = "";
+
+          text += "読み取り成功\n";
+          text += "Serial Number: " + event.serialNumber + "\n";
+          text += "Record数: " + event.message.records.length + "\n\n";
+
+          event.message.records.forEach((record, index) => {
+            text += "----- Record " + (index + 1) + " -----\n";
+            text += "recordType: " + record.recordType + "\n";
+            text += "mediaType: " + (record.mediaType || "") + "\n";
+            text += "id: " + (record.id || "") + "\n";
+            text += "encoding: " + (record.encoding || "") + "\n";
+            text += "lang: " + (record.lang || "") + "\n";
+            text += "data:\n" + decodeRecord(record) + "\n\n";
+          });
+
+          readOutput.textContent = text;
+        });
+
+        ndef.addEventListener("readingerror", () => {
+          readOutput.textContent = "読み取りエラー。タグをもう一度かざしてください。";
+        });
+
+      } catch (error) {
+        readOutput.textContent = "読み取り開始エラー:\n" + error;
+      }
+    });
+
+    stopScanButton.addEventListener("click", () => {
+      if (abortController) {
+        abortController.abort();
+        abortController = null;
+      }
+
+      startScanButton.disabled = false;
+      stopScanButton.disabled = true;
+      readOutput.textContent += "\n\n読み取りを停止しました。";
+    });
+
+    writeButton.addEventListener("click", async () => {
+      if (!checkSupport()) return;
+
+      const type = document.getElementById("writeType").value;
+      const data = document.getElementById("writeData").value;
+      const overwrite = document.getElementById("overwrite").checked;
+
+      if (!data.trim()) {
+        writeOutput.textContent = "書き込む内容を入力してください。";
+        return;
+      }
+
+      try {
+        const ndef = new NDEFReader();
+
+        writeOutput.textContent = "書き込み待機中。NFCタグをスマホの背面にかざしてください。";
+
+        if (type === "text") {
+          await ndef.write(data, { overwrite });
+        }
+
+        if (type === "url") {
+          await ndef.write({
+            records: [
+              {
+                recordType: "url",
+                data: data
+              }
+            ]
+          }, { overwrite });
+        }
+
+        if (type === "json") {
+          const parsed = JSON.parse(data);
+          const encoder = new TextEncoder();
+
+          await ndef.write({
+            records: [
+              {
+                recordType: "mime",
+                mediaType: "application/json",
+                data: encoder.encode(JSON.stringify(parsed))
+              }
+            ]
+          }, { overwrite });
+        }
+
+        writeOutput.textContent = "書き込み成功";
+
+      } catch (error) {
+        writeOutput.textContent = "書き込みエラー:\n" + error;
+      }
+    });
+
+    checkSupport();
+  </script>
 </body>
 </html>
